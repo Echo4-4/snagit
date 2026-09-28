@@ -8,9 +8,10 @@ A simple YouTube downloader by Echo404: playlist, single video, or MP3.
 - A JS runtime (deno, node or bun)
 
 ## Usage
-snagit                       interactive menu
 snagit "URL" -q 720          single video
+
 snagit "URL" -p -r 1-5       playlist, items 1-5
+
 snagit "URL" -a              MP3
 
 Run snagit -h for all flags.
