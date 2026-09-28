@@ -20,7 +20,7 @@ Run snagit -h for all flags.
 Run this once from the folder containing `snagit.py`. After that you can use `snagit` from anywhere, without typing `python` or `./`.
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/snagit.git
+git clone https://github.com/Echo4-4/snagit.git
 cd snagit
 chmod +x snagit.py
 mkdir -p ~/.local/bin
