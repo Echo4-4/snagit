@@ -48,7 +48,17 @@ DENO_BIN = os.path.join(os.path.expanduser("~"), ".deno", "bin")
 JACK = "[JACK]"      # not installed
 ALRIGHT = "[ALRIGHT]"  # installed
 
-BANNER = r"""
+BANNER_LINES = [
+    "███████╗███╗   ██╗ █████╗  ██████╗ ██╗████████╗",
+    "██╔════╝████╗  ██║██╔══██╗██╔════╝ ██║╚══██╔══╝",
+    "███████╗██╔██╗ ██║███████║██║  ███╗██║   ██║   ",
+    "╚════██║██║╚██╗██║██╔══██║██║   ██║██║   ██║   ",
+    "███████║██║ ╚████║██║  ██║╚██████╔╝██║   ██║   ",
+    "╚══════╝╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝ ╚═╝   ╚═╝   ",
+]
+
+# plain fallback for terminals that can't show block characters
+BANNER_FALLBACK = r"""
   ____                    ___ _
  / ___| _ __   __ _  __ _|_ _| |_
  \___ \| '_ \ / _` |/ _` || || __|
@@ -56,6 +66,10 @@ BANNER = r"""
  |____/|_| |_|\__,_|\__, |___|\__|
                     |___/
 """
+
+# RGB gradient (start -> end), edit these two to change the banner colors
+GRADIENT_START = (0, 224, 255)    # cyan
+GRADIENT_END = (255, 60, 200)     # magenta
 
 
 # ---------- requirements check ----------
@@ -171,8 +185,36 @@ def check_requirements(verbose=True):
     return js_name
 
 
+def print_banner():
+    """Prints the SnagIt banner with a diagonal RGB gradient (plain if colors are off)."""
+    try:
+        "█╗║╔═╝╚".encode(sys.stdout.encoding or "utf-8")
+    except (UnicodeEncodeError, LookupError):
+        print(BANNER_FALLBACK)
+        return
+    use_color = sys.stdout.isatty() and "NO_COLOR" not in os.environ
+    if not use_color:
+        print("\n" + "\n".join(BANNER_LINES) + "\n")
+        return
+    if OS == "Windows":
+        os.system("")  # switches on ANSI colors in the Windows console
+    rows, cols = len(BANNER_LINES), max(len(l) for l in BANNER_LINES)
+    out = []
+    for r, line in enumerate(BANNER_LINES):
+        chars = []
+        for c, ch in enumerate(line):
+            if ch == " ":
+                chars.append(ch)
+                continue
+            t = (c / cols) * 0.75 + (r / rows) * 0.25   # mostly left -> right, slightly top -> bottom
+            rgb = [round(a + (b - a) * t) for a, b in zip(GRADIENT_START, GRADIENT_END)]
+            chars.append(f"\033[38;2;{rgb[0]};{rgb[1]};{rgb[2]}m{ch}")
+        out.append("".join(chars) + "\033[0m")
+    print("\n" + "\n".join(out) + "\n")
+
+
 def welcome():
-    print(BANNER)
+    print_banner()
     print("  Welcome to SnagIt by Echo404")
     print(f"  Twitter: {TWITTER}")
     print("  " + "-" * 30 + "\n")
