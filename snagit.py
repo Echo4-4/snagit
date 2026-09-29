@@ -34,6 +34,7 @@ VERSION = "1.1.0"
 TWITTER = "@JeffreyPeter_"
 QUALITIES = ("360", "480", "720", "1080")
 DEFAULT_QUALITY = "720"
+VERBOSE = False  # False = clean progress only, True = full yt-dlp output
 # Saves to ~/Downloads/SnagIt (works on Windows, Linux and macOS)
 OUTPUT_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "SnagIt")
 RANGE_RE = re.compile(r"^\d+(-\d+)?(,\d+(-\d+)?)*$")
@@ -283,10 +284,149 @@ def mp3_options(playlist, items):
     return opts
 
 
+# ---------- clean (non-verbose) output ----------
+
+def fmt_size(n):
+    for unit in ("B", "KiB", "MiB", "GiB"):
+        if n < 1024 or unit == "GiB":
+            return f"{n:.1f}{unit}" if unit != "B" else f"{int(n)}B"
+        n /= 1024
+
+
+def fmt_eta(sec):
+    sec = int(sec)
+    return f"{sec // 60:02d}:{sec % 60:02d}"
+
+
+class CleanUI:
+    """Compact output: a header line per video, a live progress bar, then a result line."""
+
+    def __init__(self):
+        try:
+            "█░✓✗".encode(sys.stdout.encoding or "utf-8")
+            self.full, self.empty, self.ok, self.bad = "█", "░", "✓", "✗"
+        except (UnicodeEncodeError, LookupError):
+            self.full, self.empty, self.ok, self.bad = "#", "-", "OK", "x"
+        self.tty = sys.stdout.isatty()
+        self.current = None      # id of the video being shown
+        self.state = None        # None (in progress), "done" or "failed"
+        self.bar_active = False
+        self.done_count = 0
+        self.failed_count = 0
+
+    def _width(self):
+        return shutil.get_terminal_size((80, 20)).columns - 1
+
+    def _clear_bar(self):
+        if self.bar_active:
+            sys.stdout.write("\r" + " " * self._width() + "\r")
+            self.bar_active = False
+
+    def _mark_done(self):
+        self._clear_bar()
+        print(f"  {self.ok} Saved")
+        self.done_count += 1
+        self.state = "done"
+
+    def finish(self):
+        """Closes the last video if nothing else did."""
+        if self.current is not None and self.state is None:
+            self._mark_done()
+
+    def begin(self, info):
+        key = info.get("id") or info.get("title")
+        if key == self.current:
+            return
+        self.finish()
+        self.current, self.state = key, None
+        idx = info.get("playlist_index")
+        total = info.get("n_entries") or info.get("playlist_count")
+        prefix = f"[{idx}/{total}] " if idx and total else (f"[{idx}] " if idx else "")
+        print(f"{prefix}{info.get('title') or key}")
+
+    def error(self, msg):
+        self._clear_bar()
+        msg = re.sub(r"^ERROR:\s*", "", str(msg)).strip()
+        print(f"  {self.bad} {msg}")
+        if self.current is not None and self.state is None:
+            self.state = "failed"
+            self.failed_count += 1
+
+    # yt-dlp hooks
+    def progress(self, d):
+        info = d.get("info_dict") or {}
+        if d.get("status") not in ("downloading", "finished"):
+            return
+        self.begin(info)  # 'finished' also covers files that already existed
+        if d["status"] != "downloading" or not self.tty:
+            return
+
+        got = d.get("downloaded_bytes") or 0
+        total = d.get("total_bytes") or d.get("total_bytes_estimate")
+        frac = got / total if total else None
+        if frac is None and d.get("fragment_count"):
+            frac = (d.get("fragment_index") or 0) / d["fragment_count"]
+        frac = min(max(frac, 0.0), 1.0) if frac is not None else None
+
+        if info.get("vcodec") not in (None, "none"):
+            kind = "video"
+        elif info.get("acodec") not in (None, "none"):
+            kind = "audio"
+        else:
+            kind = ""
+
+        n = 24
+        if frac is None:
+            bar, pct = self.empty * n, f"{fmt_size(got):>7}"
+        else:
+            filled = int(frac * n)
+            bar, pct = self.full * filled + self.empty * (n - filled), f"{frac * 100:5.1f}%"
+        speed = f"{fmt_size(d['speed'])}/s" if d.get("speed") else ""
+        eta = f"ETA {fmt_eta(d['eta'])}" if d.get("eta") is not None else ""
+        line = f"  {kind:<5} {bar} {pct}  {speed:>10}  {eta}"
+        sys.stdout.write("\r" + line.ljust(self._width())[:self._width()])
+        sys.stdout.flush()
+        self.bar_active = True
+
+    def post(self, d):
+        if d.get("postprocessor") == "MoveFiles" and d.get("status") == "finished":
+            if self.current is not None and self.state is None:
+                self._mark_done()
+
+
+class CleanLogger:
+    """Swallows yt-dlp's own messages; only errors are shown (through CleanUI)."""
+
+    def __init__(self, ui):
+        self.ui = ui
+
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg): pass
+    def error(self, msg): self.ui.error(msg)
+
+
 def run(url, opts):
     print("Snagging... \n")
+    ui = None
+    if not VERBOSE:
+        ui = CleanUI()
+        opts.update(
+            quiet=True, no_warnings=True, noprogress=True,
+            logger=CleanLogger(ui),
+            progress_hooks=[ui.progress],
+            postprocessor_hooks=[ui.post],
+        )
     with yt_dlp.YoutubeDL(opts) as ydl:
         code = ydl.download([url])
+
+    if ui:
+        ui.finish()
+        summary = f"{ui.done_count} saved"
+        if ui.failed_count:
+            summary += f", {ui.failed_count} failed"
+        print(f"\nDone! {summary}. Files in {OUTPUT_DIR}")
+        return 1 if ui.failed_count else code
     if code:
         print("\nSomething failed, check the messages above. Nothing (or not everything) was saved.")
     else:
@@ -319,8 +459,18 @@ def flow_mp3():
         run(url, mp3_options(False, None))
 
 
-def interactive_main():
+def interactive_main(verbose=None):
+    global VERBOSE
     welcome()
+    if verbose is None:
+        style = ask_choice(
+            "Output style:",
+            [("clean", "Clean (just progress and video names)"),
+             ("verbose", "Verbose (full yt-dlp messages)")],
+        )
+        VERBOSE = style == "verbose"
+    else:
+        VERBOSE = verbose
     while True:
         choice = ask_choice(
             "What do you want to snag?",
@@ -360,8 +510,9 @@ def build_parser():
                "  snagit URL -q 720              single video at 720p\n"
                "  snagit URL -p -q 1080 -r 1-5   first 5 videos of a playlist\n"
                "  snagit URL -a                  single video as MP3\n"
-               "  snagit URL -a -p               whole playlist as MP3\n\n"
-               f"Twitter: {TWITTER}\n",
+               "  snagit URL -a -p               whole playlist as MP3\n"
+               "  snagit URL -p -v               playlist with full yt-dlp output\n\n"
+               f"made by Echo404 - Twitter: {TWITTER}\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("url", nargs="?", help="video or playlist link (asked for if omitted)")
@@ -375,6 +526,8 @@ def build_parser():
                    help='playlist items to get, e.g. 1-5,8,10-12 (default: all; needs -p)')
     p.add_argument("-o", "--output", metavar="DIR",
                    help=f"output folder (default: {OUTPUT_DIR})")
+    p.add_argument("-v", "--verbose", action="store_true",
+                   help="show full yt-dlp output (default: clean progress only)")
     p.add_argument("-i", "--interactive", action="store_true",
                    help="force the interactive menu")
     p.add_argument("-V", "--version", action="version", version=f"SnagIt {VERSION}")
@@ -382,7 +535,8 @@ def build_parser():
 
 
 def cli_main(args):
-    global OUTPUT_DIR
+    global OUTPUT_DIR, VERBOSE
+    VERBOSE = args.verbose
     if not HAS_YTDLP:
         sys.exit("yt-dlp is required. Install it: pip install -U \"yt-dlp[default]\"")
     check_requirements(verbose=False)
@@ -411,7 +565,7 @@ def cli_main(args):
 def main():
     args = build_parser().parse_args()
     if args.interactive or len(sys.argv) == 1:
-        interactive_main()
+        interactive_main(True if args.verbose else None)
     else:
         sys.exit(cli_main(args))
 
