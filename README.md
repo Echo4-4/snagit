@@ -19,7 +19,7 @@ For search & watch (optional):
 snagit "URL" -q 720          single video
 snagit "URL" -p -r 1-5       playlist, items 1-5
 snagit "URL" -a              MP3
-snagit -s lofi hip hop       search YouTube and watch
+snagit -s TEXT       search YouTube and watch
 ```
 
 Run `snagit -h` for all flags.
@@ -29,9 +29,9 @@ Run `snagit -h` for all flags.
 Search YouTube without leaving the terminal. Results open full screen like `less`, with a small thumbnail next to each title, channel, length and view count. Scroll down and more results load automatically. Press Enter and the video opens online in your player.
 
 ```
-snagit -s lofi hip hop            search and browse
-snagit -s lofi -P mpv -q 1080     use mpv at 1080p
-snagit -s lofi -T                 no thumbnails
+snagit -s TEXT         search and browse
+snagit -s TEXT -P mpv -q 1080     use mpv at 1080p
+snagit -s TEXT -T                 no thumbnails
 ```
 
 You can also pick **Search YouTube & watch** from the interactive menu (run `snagit` with no arguments).
@@ -57,8 +57,8 @@ You can also pick **Search YouTube & watch** from the interactive menu (run `sna
 SnagIt looks for VLC, mpv, IINA and ffplay, including VLC's default install folders on Windows and macOS. Use `-P` to choose one, or to point at any other player:
 
 ```
-snagit -s lofi -P vlc
-snagit -s lofi -P "C:\path\to\player.exe"
+snagit -s TEXT -P vlc
+snagit -s TEXT -P "C:\path\to\player.exe"
 ```
 
 VLC and mpv get separate video and audio streams, so they can play up to 1080p. Other players get a single combined stream, usually 720p or lower.
