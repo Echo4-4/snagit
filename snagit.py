@@ -14,25 +14,48 @@ Run:
   python snagit.py URL -q 720           one-liner (see: python snagit.py --help)
   python snagit.py -s lofi beats        search YouTube and watch in VLC/mpv
   python snagit.py -s song name -a -f   play the top result as audio only
+  python snagit.py --web                local web interface (opens your browser)
+  python snagit.py --web --check        ...straight to the requirements page
+  python snagit.py --web --lan          also reachable from a phone on the same Wi-Fi
+
+Web interface (--web): one box that takes a link or plain text.
+  paste https://youtube.com/playlist?list=...   -> checklist of the playlist; tick videos,
+                                                   pick 720p or MP3, press Download, and the
+                                                   terminal starts it with the usual progress
+  type "yung kai blue"                          -> YouTube search results (10 at a time)
+  paste a single video link                     -> one video card (Watch / Audio / Download / MP3)
+  --lan: run `snagit --web --lan`, scan the QR code (or open the address), enter the PIN,
+  approve the device in the terminal, then paste links or stream music from Downloads.
 
 Optional (for search thumbnails):
   pip install Pillow
+Optional (QR code for --lan):
+  pip install qrcode
 """
 
 import argparse
+import http.cookies
+import http.server
+import hmac
 import importlib.util
 import io
 import json
+import mimetypes
 import os
 import platform
+import queue
 import re
+import secrets
 import shutil
+import socket
 import subprocess
 import sys
 import threading
 import time
 import unicodedata
+import urllib.parse
 import urllib.request
+import webbrowser
 
 if os.name == "nt":
     import msvcrt
@@ -55,7 +78,7 @@ except ImportError:
     yt_dlp = None
     HAS_YTDLP = False
 
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 TWITTER = "@JeffreyPeter_"
 QUALITIES = ("360", "480", "720", "1080")
 DEFAULT_QUALITY = "720"
@@ -143,15 +166,16 @@ def js_install_hint():
     return "install deno or node from their websites"
 
 
-def offer_js_install():
-    """Asks the user, then installs Deno using the method that fits their OS."""
+def offer_js_install(ask=True):
+    """Asks the user, then installs Deno using the method that fits their OS.
+    ask=False skips the y/n question (the web page has its own button)."""
     plan = deno_install_plan()
     if plan is None:
         return
     display, args, use_shell = plan
     print(f"  Detected OS: {OS}")
     print(f"  I can install Deno for you with: {display}")
-    if input("  Install Deno now? (y/n): ").strip().lower() != "y":
+    if ask and input("  Install Deno now? (y/n): ").strip().lower() != "y":
         print()
         return
     print()
@@ -173,9 +197,9 @@ def offer_js_install():
             print('  If it still isn\'t found: export PATH="$HOME/.deno/bin:$PATH"\n')
 
 
-def check_requirements(verbose=True):
-    """Prints the requirements checklist. Returns the JS runtime found (or None).
-    With verbose=False (one-liner mode) only the warnings are printed."""
+def requirement_checks():
+    """The checklist data, shared by the terminal and the web page.
+    Returns (checks, js_name, has_ejs) where checks is a list of (label, ok, fix_hint)."""
     js_name, js_path = find_js_runtime()
     has_ejs = importlib.util.find_spec("yt_dlp_ejs") is not None
 
@@ -192,6 +216,13 @@ def check_requirements(verbose=True):
          "install VLC (videolan.org) or mpv (mpv.io)"),
         ("Pillow (search thumbnails, optional)", HAS_PIL, "pip install Pillow"),
     ]
+    return checks, js_name, has_ejs
+
+
+def check_requirements(verbose=True):
+    """Prints the requirements checklist. Returns the JS runtime found (or None).
+    With verbose=False (one-liner mode) only the warnings are printed."""
+    checks, js_name, has_ejs = requirement_checks()
 
     if verbose:
         print("  Requirements:")
@@ -476,7 +507,8 @@ class CleanLogger:
     def error(self, msg): self.ui.error(msg)
 
 
-def run(url, opts):
+def run(url, opts, tap=None):
+    """tap(kind, d) is optional: the web page uses it to mirror progress (kind is "progress" or "post")."""
     print("Snagging... \n")
     ui = None
     if not VERBOSE:
@@ -487,6 +519,9 @@ def run(url, opts):
             progress_hooks=[ui.progress],
             postprocessor_hooks=[ui.post],
         )
+    if tap:
+        opts.setdefault("progress_hooks", []).append(lambda d: tap("progress", d))
+        opts.setdefault("postprocessor_hooks", []).append(lambda d: tap("post", d))
     with yt_dlp.YoutubeDL(opts) as ydl:
         code = ydl.download([url])
 
@@ -1292,6 +1327,1497 @@ def interactive_main(verbose=None):
         print()
 
 
+# ---------- web interface (--web) ----------
+# A small local web UI on top of everything above. Standard library only.
+# Downloads are queued and run by ONE worker thread through the normal run(), so the
+# clean progress output shows in the terminal exactly like the other modes.
+
+WEB_PORT = 8642
+WEB_PLAYLIST_PAGE = 100
+WEB_LAN_TIMEOUT = 30                       # idle minutes before --lan turns itself off
+WEB_TEST_URL = "https://www.youtube.com/watch?v=jNQXAC9IVRw"   # 19-second video used by "Test"
+AUDIO_EXTS = (".mp3", ".m4a", ".opus", ".ogg", ".oga", ".flac", ".wav", ".aac")
+VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".m4v")
+MEDIA_EXTS = AUDIO_EXTS + VIDEO_EXTS
+PARTIAL_RE = re.compile(r"\.f\d+\.\w+$|\.temp\.\w+$", re.I)   # yt-dlp's unfinished pieces
+EXTRA_MIME = {".m4a": "audio/mp4", ".opus": "audio/ogg", ".mp3": "audio/mpeg", ".aac": "audio/aac",
+              ".mkv": "video/x-matroska", ".webm": "video/webm", ".flac": "audio/flac"}
+WEB_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
+           "img-src 'self' https://i.ytimg.com data:; media-src 'self' https: blob:; "
+           "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+QUIET_PATHS = ("/api/events", "/api/state")   # requests that don't count as "activity" for --lan-timeout
+
+APP = None   # the WebApp instance, set by web_main()
+
+
+class ApiError(Exception):
+    def __init__(self, msg, code=400):
+        super().__init__(msg)
+        self.code = code
+
+
+# --- small pure helpers (easy to test) ---
+
+def compress_indices(nums):
+    """[1,2,3,5,8] -> '1-3,5,8' (a yt-dlp playlist_items string)."""
+    nums = sorted(set(int(n) for n in nums))
+    out, i = [], 0
+    while i < len(nums):
+        j = i
+        while j + 1 < len(nums) and nums[j + 1] == nums[j] + 1:
+            j += 1
+        out.append(str(nums[i]) if i == j else f"{nums[i]}-{nums[j]}")
+        i = j + 1
+    return ",".join(out)
+
+
+def safe_http_url(text):
+    """Returns the text if it is a plain http(s) link, else None. Nothing else is ever accepted."""
+    text = (text or "").strip()
+    if not text or len(text) > 2000 or CONTROL_RE.search(text) or " " in text:
+        return None
+    try:
+        p = urllib.parse.urlsplit(text)
+        ok = p.scheme in ("http", "https") and bool(p.hostname)
+    except ValueError:
+        return None
+    return text if ok else None
+
+
+def classify_input(text):
+    """What did the user type in the one box? Returns (kind, value):
+    ('playlist', url) | ('video', url) | ('search', text)."""
+    text = (text or "").strip()
+    url = safe_http_url(text)
+    if not url and re.match(r"^(www\.|m\.|music\.)?(youtube\.com|youtu\.be)/\S+$", text, re.I):
+        url = safe_http_url("https://" + text)
+    if not url:
+        return "search", text
+    p = urllib.parse.urlsplit(url)
+    qs = urllib.parse.parse_qs(p.query)
+    host = (p.hostname or "").lower()
+    is_yt = host == "youtu.be" or host.endswith(("youtube.com", "youtube-nocookie.com"))
+    if "list" in qs or p.path.rstrip("/") == "/playlist":
+        lid = (qs.get("list") or [""])[0]
+        if is_yt and lid:
+            return "playlist", "https://www.youtube.com/playlist?list=" + urllib.parse.quote(lid, safe="")
+        return "playlist", url
+    return "video", url
+
+
+def lan_addresses():
+    ips = []
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))     # no packet is sent; just asks the OS which NIC it would use
+        ips.append(s.getsockname()[0])
+        s.close()
+    except OSError:
+        pass
+    try:
+        ips += [i[4][0] for i in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET)]
+    except OSError:
+        pass
+    return [ip for ip in dict.fromkeys(ips) if not ip.startswith("127.")]
+
+
+def need_ytdlp():
+    if not HAS_YTDLP:
+        raise ApiError("yt-dlp isn't installed. Open the Check page and press Update yt-dlp.", 503)
+
+
+def probe_opts(**extra):
+    opts = {"quiet": True, "no_warnings": True, "skip_download": True, "logger": QuietLogger()}
+    js_name, js_path = find_js_runtime()
+    if js_name:
+        opts["js_runtimes"] = {js_name: {"path": js_path}}
+    opts.update(extra)
+    return opts
+
+
+def web_search(query, offset):
+    """Same yt-dlp extract_flat search SearchSession uses, 10 more results at a time."""
+    need_ytdlp()
+    s = SearchSession(query, DEFAULT_QUALITY, [], None, False)
+    want = min(offset + SEARCH_PAGE, SEARCH_MAX)
+    s._fetch(want)                                  # runs synchronously and fills s.results
+    if s.status.startswith("Search failed"):
+        raise ApiError(s.status, 502)
+    items = s.results[offset:want]
+    return {"items": items, "more": len(s.results) >= want and want < SEARCH_MAX}
+
+
+def web_playlist(url, start):
+    need_ytdlp()
+    end = start + WEB_PLAYLIST_PAGE - 1
+    opts = probe_opts(extract_flat=True, ignoreerrors=True, playlist_items=f"{start}-{end}")
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info:
+        raise ApiError("Couldn't read that playlist (private, deleted, or not a playlist).", 502)
+    entries = list(info.get("entries") or [])
+    rows = []
+    for i, e in enumerate(entries):
+        if not e or not e.get("id"):
+            continue
+        rows.append({"index": start + i, "id": e["id"],
+                     "title": CONTROL_RE.sub(" ", e.get("title") or e["id"]),
+                     "duration": e.get("duration"),
+                     "channel": CONTROL_RE.sub(" ", e.get("channel") or e.get("uploader") or "")})
+    total = info.get("playlist_count") or info.get("n_entries")
+    return {"url": url, "title": CONTROL_RE.sub(" ", info.get("title") or "Playlist"),
+            "count": total, "items": rows, "has_more": len(entries) >= WEB_PLAYLIST_PAGE
+            and (not total or start + len(entries) - 1 < total)}
+
+
+def web_video(url):
+    need_ytdlp()
+    opts = probe_opts(noplaylist=True, ignore_no_formats_error=True, extract_flat="in_playlist")
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=False)
+    if not info or not info.get("id"):
+        raise ApiError("Couldn't read that link.", 502)
+    return {"id": info["id"], "title": CONTROL_RE.sub(" ", info.get("title") or info["id"]),
+            "channel": CONTROL_RE.sub(" ", info.get("channel") or info.get("uploader") or ""),
+            "duration": info.get("duration"), "views": info.get("view_count"),
+            "live": info.get("live_status") in ("is_live", "is_upcoming"),
+            "url": info.get("webpage_url") or url}
+
+
+def web_lookup(text):
+    kind, value = classify_input(text)
+    if not value:
+        raise ApiError("Type or paste something first.")
+    if kind == "search":
+        r = web_search(value, 0)
+        return {"kind": "search", "query": value, **r}
+    if kind == "playlist":
+        return {"kind": "playlist", **web_playlist(value, 1)}
+    return {"kind": "video", "item": web_video(value)}
+
+
+def list_downloads():
+    root, out = OUTPUT_DIR, []
+    if not os.path.isdir(root):
+        return out
+    for dirpath, _, names in os.walk(root):
+        for name in names:
+            ext = os.path.splitext(name)[1].lower()
+            if ext not in MEDIA_EXTS or PARTIAL_RE.search(name):
+                continue
+            full = os.path.join(dirpath, name)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            rel = os.path.relpath(full, root).replace(os.sep, "/")
+            out.append({"path": rel, "name": name, "folder": os.path.dirname(rel), "size": st.st_size,
+                        "mtime": int(st.st_mtime), "audio": ext in AUDIO_EXTS})
+    out.sort(key=lambda f: -f["mtime"])
+    return out[:3000]
+
+
+def resolve_download_path(rel):
+    """Maps a URL path under /files/ to a real file inside OUTPUT_DIR, or None (path traversal safe)."""
+    rel = urllib.parse.unquote(rel)
+    if not rel or "\x00" in rel or "\\" in rel or rel.startswith("/"):
+        return None
+    parts = rel.split("/")
+    if any(p in ("", ".", "..") or ":" in p for p in parts):
+        return None
+    root = os.path.realpath(OUTPUT_DIR)
+    full = os.path.realpath(os.path.join(root, *parts))
+    try:
+        if os.path.commonpath([root, full]) != root or full == root:
+            return None
+    except ValueError:
+        return None
+    if (not os.path.isfile(full) or os.path.splitext(full)[1].lower() not in MEDIA_EXTS
+            or PARTIAL_RE.search(os.path.basename(full))):
+        return None
+    return full
+
+
+def parse_byte_range(header, size):
+    """None = no usable Range header (send everything); 'bad' = unsatisfiable; else (start, end)."""
+    m = re.match(r"^\s*bytes=(\d*)-(\d*)\s*$", header or "")
+    if not m or (m.group(1) == "" and m.group(2) == ""):
+        return None
+    a, b = m.groups()
+    if a == "":
+        n = int(b)
+        if n == 0:
+            return "bad"
+        start, end = max(size - n, 0), size - 1
+    else:
+        start = int(a)
+        end = min(int(b), size - 1) if b else size - 1
+    if size == 0 or start >= size or start > end:
+        return "bad"
+    return start, end
+
+
+def web_check_data(app):
+    checks, js_name, has_ejs = requirement_checks()
+
+    def first_line(cmd):
+        try:
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=6, stdin=subprocess.DEVNULL)
+            lines = (r.stdout or r.stderr).strip().splitlines()
+            return lines[0].strip()[:70] if lines else ""
+        except Exception:
+            return ""
+
+    detail = [""] * len(checks)
+    if HAS_YTDLP:
+        try:
+            detail[0] = yt_dlp.version.__version__
+        except Exception:
+            pass
+    if has_ejs:
+        try:
+            import importlib.metadata as md
+            detail[1] = md.version("yt-dlp-ejs")
+        except Exception:
+            pass
+    ff = shutil.which("ffmpeg")
+    if ff:
+        m = re.search(r"version\s+(\S+)", first_line([ff, "-version"]))
+        detail[2] = m.group(1) if m else ""
+    _, js_path = find_js_runtime()
+    if js_path:
+        detail[3] = first_line([js_path, "--version"])
+    detail[4] = ", ".join(n for n in PLAYER_SPECS if find_player(n))
+    if HAS_PIL:
+        try:
+            import PIL
+            detail[5] = PIL.__version__
+        except Exception:
+            pass
+    rows = [{"label": label, "ok": ok, "fix": fix, "detail": detail[i]}
+            for i, (label, ok, fix) in enumerate(checks)]
+    lan = None
+    if app.lan:
+        ip = app.lan_ips[0] if app.lan_ips else None
+        hint = {"Windows": "Windows: choose Allow when the firewall asks about Python.",
+                "Darwin": "macOS: choose Allow when asked about incoming connections."}.get(
+                    OS, f"Linux: sudo ufw allow {app.port}")
+        lan = {"on": app.lan_on, "address": f"http://{ip}:{app.port}/" if ip else None,
+               "port": app.port, "firewall": hint}
+    return {"checks": rows, "lan": lan, "python": platform.python_version(), "version": VERSION}
+
+
+# --- jobs and the queue ---
+
+class Job:
+    def __init__(self, kind, label, url=None, quality=None, playlist=False, items=None, total=None, fn=None):
+        self.id = 0
+        self.kind, self.label, self.url = kind, label, url
+        self.quality, self.playlist, self.items, self.total, self.fn = quality, playlist, items, total, fn
+        self.status = "queued"          # queued | running | done | failed | cancelled
+        self.cancel = False
+        self.title, self.idx, self.n = "", None, total
+        self.pct, self.speed, self.eta, self.phase = None, "", "", ""
+        self.done, self.error, self.note = 0, "", ""
+
+    def public(self):
+        return {"id": self.id, "kind": self.kind, "label": self.label, "quality": self.quality,
+                "status": self.status, "title": self.title, "idx": self.idx, "n": self.n, "pct": self.pct,
+                "speed": self.speed, "eta": self.eta, "phase": self.phase, "done": self.done,
+                "error": self.error, "note": self.note}
+
+
+class WebApp:
+    def __init__(self, port, lan, lan_timeout, start_view="home"):
+        self.port, self.lan, self.lan_on, self.lan_timeout = port, lan, lan, lan_timeout
+        self.start_view = start_view
+        self.token = secrets.token_urlsafe(24)
+        self.pin = self.new_pin()
+        self.lan_ips = lan_addresses() if lan else []
+        self.allowed_hosts = {"localhost", "127.0.0.1", "[::1]"}
+        if lan:
+            name = socket.gethostname().lower()
+            self.allowed_hosts |= set(self.lan_ips) | {name, name + ".local"}
+        self.lock = threading.RLock()
+        self.cond = threading.Condition()
+        self.version, self.last_touch = 0, 0.0
+        self.jobs, self.next_id, self.q, self.current = [], 1, queue.Queue(), None
+        self.paired, self.pending, self.approvals = set(), {}, queue.Queue()
+        self.fails, self.global_fails = {}, []
+        self.last_lan = time.time()
+        self.audio_proc = None
+        self.stopping = False
+
+    # -- security --
+
+    @staticmethod
+    def new_pin():
+        return f"{secrets.randbelow(10 ** 6):06d}"
+
+    def token_ok(self, value):
+        return bool(value) and hmac.compare_digest(value.encode("utf-8", "ignore"), self.token.encode())
+
+    def host_ok(self, header):
+        """Only our own names are accepted, which blocks DNS-rebinding (evil.com pointing at 127.0.0.1)."""
+        header = (header or "").strip().lower()
+        if header.startswith("["):
+            host, _, rest = header[1:].partition("]")
+            host, port = "[" + host + "]", rest.lstrip(":")
+        else:
+            host, _, port = header.partition(":")
+        return host in self.allowed_hosts and port == str(self.port)
+
+    def origin_ok(self, origin):
+        try:
+            p = urllib.parse.urlsplit(origin)
+        except ValueError:
+            return False
+        return p.scheme == "http" and self.host_ok(p.netloc)
+
+    def is_paired(self, dev):
+        return bool(dev) and dev in self.paired
+
+    # -- live updates --
+
+    def touch(self, soon=False):
+        now = time.time()
+        if soon and now - self.last_touch < 0.25:
+            return
+        self.last_touch = now
+        with self.cond:
+            self.version += 1
+            self.cond.notify_all()
+
+    def snapshot(self):
+        with self.lock:
+            jobs = [j.public() for j in self.jobs]
+        return json.dumps({"jobs": jobs, "lan_on": self.lan_on}).encode()
+
+    # -- queue --
+
+    def add_job(self, job):
+        with self.lock:
+            job.id, self.next_id = self.next_id, self.next_id + 1
+            self.jobs.append(job)
+            finished = [j for j in self.jobs if j.status in ("done", "failed", "cancelled")]
+            for j in finished[:-40]:
+                self.jobs.remove(j)
+        self.q.put(job)
+        self.touch()
+        return job.id
+
+    def cancel_queued(self, jid):
+        with self.lock:
+            for j in self.jobs:
+                if j.id == jid and j.status == "queued":
+                    j.status, j.cancel = "cancelled", True
+        self.touch()
+
+    def worker(self):
+        while True:
+            job = self.q.get()
+            if job.status != "queued":
+                continue
+            job.status = "running"
+            self.current = job
+            self.touch()
+            try:
+                code = self.run_download(job) if job.kind == "download" else job.fn(job)
+                job.status = "done" if not code else "failed"
+                if code and not job.error:
+                    job.error = "Something failed - check the terminal for details."
+            except KeyboardInterrupt:
+                job.status = "cancelled"
+                print("\n[web] Job cancelled.")
+            except Exception as e:
+                job.status, job.error = "failed", short_error(e)
+                print(f"\n[web] Error: {job.error}")
+            finally:
+                job.pct = None
+                self.current = None
+                self.touch()
+
+    def run_download(self, job):
+        if job.quality == "mp3":
+            opts = mp3_options(job.playlist, job.items)
+        else:
+            opts = video_options(job.quality, job.playlist, job.items)
+        print(f"\n[web] Job {job.id}: {job.label}")
+        return run(job.url, opts, tap=self.make_tap(job))
+
+    def make_tap(self, job):
+        """Progress hooks that mirror yt-dlp's progress on the web page (and honor Ctrl+C cancel)."""
+        def tap(kind, d):
+            if job.cancel:
+                raise KeyboardInterrupt
+            if kind == "post":
+                if d.get("postprocessor") == "MoveFiles" and d.get("status") == "finished":
+                    job.done, job.pct, job.phase = job.done + 1, 100, "saved"
+                    self.touch()
+                elif d.get("status") == "started":
+                    job.phase = "converting"
+                    self.touch(soon=True)
+                return
+            if d.get("status") not in ("downloading", "finished"):
+                return
+            info = d.get("info_dict") or {}
+            job.title = info.get("title") or job.title
+            job.idx = info.get("playlist_index") or job.idx
+            job.n = info.get("n_entries") or info.get("playlist_count") or job.total or job.n
+            if d["status"] == "finished":
+                job.phase = "processing"
+            else:
+                got = d.get("downloaded_bytes") or 0
+                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                frac = got / total if total else None
+                if frac is None and d.get("fragment_count"):
+                    frac = (d.get("fragment_index") or 0) / d["fragment_count"]
+                job.pct = round(min(max(frac, 0.0), 1.0) * 100, 1) if frac is not None else None
+                job.speed = f"{fmt_size(d['speed'])}/s" if d.get("speed") else ""
+                job.eta = fmt_eta(d["eta"]) if d.get("eta") is not None else ""
+                job.phase = "downloading"
+            self.touch(soon=True)
+        return tap
+
+    def add_task(self, label, fn):
+        return self.add_job(Job("task", label, fn=fn))
+
+    # -- LAN: pairing, approval, auto-off --
+
+    def try_pin(self, ip, pin):
+        """Returns (ok, message, retry_seconds). Wrong PINs are rate limited per device and overall."""
+        now = time.time()
+        with self.lock:
+            rec = self.fails.setdefault(ip, [0, 0.0])
+            if now < rec[1]:
+                return False, "Too many wrong PINs. Wait a bit and try again.", int(rec[1] - now)
+            if hmac.compare_digest(str(pin).encode("utf-8", "ignore"), self.pin.encode()):
+                rec[0] = 0
+                return True, "", 0
+            rec[0] += 1
+            if rec[0] >= 5:
+                rec[0], rec[1] = 0, now + 300
+            self.global_fails = [t for t in self.global_fails if now - t < 600] + [now]
+            if len(self.global_fails) >= 10:          # someone is guessing: new PIN, old guesses are useless
+                self.global_fails = []
+                self.pin = self.new_pin()
+                print(f"\n[lan] Several wrong PINs in a row. New PIN: {self.pin}")
+            return False, "Wrong PIN.", 0
+
+    def request_approval(self, ip):
+        rid = secrets.token_urlsafe(12)
+        req = {"ip": ip, "state": "waiting", "t": time.time()}
+        with self.lock:
+            self.pending[rid] = req
+        self.approvals.put(req)
+        return rid
+
+    def approver(self):
+        """Asks in the terminal, one device at a time."""
+        while True:
+            req = self.approvals.get()
+            if req["state"] != "waiting" or time.time() - req["t"] > 120 or not self.lan_on:
+                req["state"] = "denied"
+                continue
+            print(f"\n{req['ip']} wants to connect. Allow? [y/N] ", end="", flush=True)
+            try:
+                ans = input().strip().lower()
+            except (EOFError, OSError):
+                ans = "n"
+            if req["state"] == "waiting":
+                req["state"] = "allowed" if ans in ("y", "yes") else "denied"
+            print(f"[lan] {req['ip']}: {'allowed' if req['state'] == 'allowed' else 'denied'}")
+
+    def approval_status(self, rid, ip):
+        with self.lock:
+            req = self.pending.get(rid)
+            if not req or req["ip"] != ip:
+                return None, None
+            if req["state"] == "waiting" and time.time() - req["t"] > 120:
+                req["state"] = "denied"
+            state = req["state"]
+            if state == "allowed":
+                dev = secrets.token_urlsafe(24)
+                self.paired.add(dev)
+                self.last_lan = time.time()
+                del self.pending[rid]
+                return state, dev
+            if state == "denied":
+                del self.pending[rid]
+            return state, None
+
+    def watchdog(self):
+        while not self.stopping:
+            time.sleep(15)
+            if self.lan_on and self.lan_timeout > 0 and time.time() - self.last_lan > self.lan_timeout * 60:
+                self.lan_on = False
+                self.paired.clear()
+                print(f"\n[lan] No activity for {self.lan_timeout} minutes: LAN access is now OFF. "
+                      "Restart with --lan to turn it on again.")
+                self.touch()
+
+    # -- desktop player --
+
+    def stop_audio(self):
+        proc, self.audio_proc = self.audio_proc, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+
+# --- the HTTP handler ---
+
+class WebHandler(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    server_version = "SnagIt"
+    sys_version = ""
+    timeout = 120
+
+    def log_message(self, *args):
+        pass
+
+    def is_local_client(self):
+        ip = self.client_address[0]
+        return ip in ("127.0.0.1", "::1") or ip.startswith("::ffff:127.")
+
+    def do_GET(self): self._handle()
+    def do_HEAD(self): self._handle()
+    def do_POST(self): self._handle()
+
+    # -- responses --
+
+    def _send(self, code, body, ctype, extra=(), cache="no-store"):
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", cache)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Content-Security-Policy", WEB_CSP)
+        if code >= 400:
+            self.send_header("Connection", "close")
+            self.close_connection = True
+        for k, v in extra:
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def _text(self, code, msg):
+        self._send(code, msg.encode(), "text/plain; charset=utf-8")
+
+    def _json(self, obj, code=200, extra=()):
+        self._send(code, json.dumps(obj).encode(), "application/json", extra)
+
+    def _body(self):
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0 or n > 1_000_000:
+            raise ApiError("Bad request size", 413)
+        raw = self.rfile.read(n) if n else b""
+        try:
+            data = json.loads(raw.decode("utf-8") or "{}")
+        except ValueError:
+            raise ApiError("Invalid JSON")
+        if not isinstance(data, dict):
+            raise ApiError("Invalid JSON")
+        return data
+
+    # -- the gate: host, origin, token, LAN pairing --
+
+    def _handle(self):
+        app = APP
+        try:
+            parsed = urllib.parse.urlsplit(self.path)
+            path, method = parsed.path, self.command
+            self.local = self.is_local_client()
+            if not app.host_ok(self.headers.get("Host", "")):
+                return self._text(403, "Blocked: unexpected Host header.")
+            origin = self.headers.get("Origin")
+            if origin is not None and not app.origin_ok(origin):
+                return self._text(403, "Blocked: cross-site request.")
+            if method == "POST":
+                if origin is None and self.headers.get("Sec-Fetch-Site") not in (None, "same-origin"):
+                    return self._text(403, "Blocked: cross-site request.")
+                if not self.headers.get("Content-Type", "").lower().startswith("application/json"):
+                    return self._text(415, "Expected JSON.")
+            if not self.local and not app.lan_on:
+                return self._text(403, "LAN access is off.")
+
+            qs = urllib.parse.parse_qs(parsed.query)
+            cookies = http.cookies.SimpleCookie()
+            try:
+                cookies.load(self.headers.get("Cookie", ""))
+            except http.cookies.CookieError:
+                pass
+            cookie = lambda name: cookies[name].value if name in cookies else ""
+            tq = (qs.get("t") or [""])[0]
+            if tq and app.token_ok(tq):
+                if method == "GET" and path in ("/", "/check"):     # set the cookie, then hide the token
+                    rest = urllib.parse.urlencode([(k, v) for k in qs if k != "t" for v in qs[k]])
+                    self.send_response(302)
+                    self.send_header("Location", path + ("?" + rest if rest else ""))
+                    self.send_header("Set-Cookie", f"snagit_t={app.token}; Path=/; HttpOnly; SameSite=Strict")
+                    self.send_header("Content-Length", "0")
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Referrer-Policy", "no-referrer")
+                    self.end_headers()
+                    return
+            elif not app.token_ok(cookie("snagit_t")):
+                return self._text(403, "Missing or wrong token. Open the link printed in the terminal.")
+
+            if not self.local:
+                if not app.is_paired(cookie("snagit_d")):
+                    return self._unpaired(method, path, qs)
+                if path not in QUIET_PATHS:
+                    app.last_lan = time.time()
+            self._route(method, path, qs)
+        except ApiError as e:
+            self._json({"error": str(e)}, e.code)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            self.close_connection = True
+        except Exception as e:
+            try:
+                self._json({"error": short_error(e)}, 500)
+            except OSError:
+                self.close_connection = True
+
+    def _unpaired(self, method, path, qs):
+        app = APP
+        ip = self.client_address[0]
+        if method == "GET" and path in ("/", "/check"):
+            return self._send(200, PAIR_HTML.encode(), "text/html; charset=utf-8")
+        if method == "GET" and path == "/app.css":
+            return self._send(200, APP_CSS.encode(), "text/css; charset=utf-8")
+        if method == "GET" and path == "/pair.js":
+            return self._send(200, PAIR_JS.encode(), "application/javascript; charset=utf-8")
+        if method == "POST" and path == "/pair":
+            data = self._body()
+            ok, msg, wait = app.try_pin(ip, data.get("pin", ""))
+            if not ok:
+                return self._json({"error": msg, "retry": wait}, 429 if wait else 403)
+            return self._json({"pending": app.request_approval(ip)})
+        if method == "GET" and path == "/pair/status":
+            state, dev = app.approval_status((qs.get("id") or [""])[0], ip)
+            extra = ()
+            if dev:
+                extra = [("Set-Cookie", f"snagit_d={dev}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000")]
+            return self._json({"state": state or "denied"}, 200, extra)
+        self._json({"error": "This device isn't paired yet."}, 401)
+
+    # -- routes --
+
+    def _route(self, method, path, qs):
+        app = APP
+        arg = lambda name, default="": (qs.get(name) or [default])[0]
+        if method in ("GET", "HEAD"):
+            if path in ("/", "/check"):
+                return self._send(200, INDEX_HTML.encode(), "text/html; charset=utf-8")
+            if path == "/app.js":
+                return self._send(200, APP_JS.encode(), "application/javascript; charset=utf-8")
+            if path == "/app.css":
+                return self._send(200, APP_CSS.encode(), "text/css; charset=utf-8")
+            if path.startswith("/files/"):
+                return self._file(path[len("/files/"):], arg("dl") == "1")
+            if path == "/api/events":
+                return self._events()
+            if path == "/api/state":
+                cfg = load_config()
+                players = available_players()
+                return self._json({
+                    "version": VERSION, "local": self.local, "start_view": app.start_view,
+                    "lan": {"enabled": app.lan, "on": app.lan_on},
+                    "config": {"watch": cfg.get("web_watch", "browser"),
+                               "player": pick_default_player(players), "players": players},
+                    "qualities": list(QUALITIES), "default_quality": DEFAULT_QUALITY,
+                    "output_dir": OUTPUT_DIR, "has_ytdlp": HAS_YTDLP})
+            if path == "/api/lookup":
+                return self._json(web_lookup(arg("q")))
+            if path == "/api/search":
+                q = arg("q").strip()
+                if not q:
+                    raise ApiError("Empty search")
+                return self._json(web_search(q, max(0, min(int(arg("offset", "0") or 0), SEARCH_MAX))))
+            if path == "/api/playlist":
+                url = safe_http_url(arg("url"))
+                if not url:
+                    raise ApiError("Only http/https links are accepted.")
+                return self._json(web_playlist(url, max(1, int(arg("start", "1") or 1))))
+            if path == "/api/downloads":
+                return self._json({"files": list_downloads()})
+            if path == "/api/check":
+                return self._json(web_check_data(app))
+        elif method == "POST":
+            return self._post(path, self._body())
+        self._text(404, "Not found")
+
+    def _need_local(self):
+        if not self.local:
+            raise ApiError("This can only be done from the computer running SnagIt.", 403)
+
+    def _post(self, path, d):
+        app = APP
+        if path == "/api/download":
+            need_ytdlp()
+            url = safe_http_url(d.get("url"))
+            if not url:
+                raise ApiError("Only http/https links are accepted.")
+            quality = str(d.get("quality") or DEFAULT_QUALITY)
+            if quality != "mp3" and quality not in QUALITIES:
+                raise ApiError("Unknown quality.")
+            label = CONTROL_RE.sub(" ", str(d.get("title") or url))[:120]
+            playlist, items, total = d.get("kind") == "playlist", None, None
+            if playlist and not d.get("all"):
+                try:
+                    nums = [int(n) for n in d.get("indices") or []]
+                except (TypeError, ValueError):
+                    raise ApiError("Bad selection.")
+                if not nums or len(nums) > 50000 or min(nums) < 1:
+                    raise ApiError("Nothing selected.")
+                items = compress_indices(nums)
+                total = len(set(nums))
+                if not valid_range(items):
+                    raise ApiError("Bad selection.")
+                label = f"{label} ({total} selected)"
+            elif playlist:
+                label += " (all)"
+            jid = app.add_job(Job("download", label, url, quality, playlist, items, total))
+            return self._json({"id": jid})
+        if path == "/api/cancel":
+            app.cancel_queued(int(d.get("id") or 0))
+            return self._json({"ok": True})
+        if path == "/api/stream":
+            need_ytdlp()
+            url = safe_http_url(d.get("url"))
+            if not url:
+                raise ApiError("Only http/https links are accepted.")
+            q = str(d.get("quality") or DEFAULT_QUALITY)
+            title, video_url, _ = resolve_stream(url, q if q in QUALITIES else DEFAULT_QUALITY,
+                                                 False, bool(d.get("audio")))
+            return self._json({"title": title, "url": video_url})
+        if path == "/api/play":
+            self._need_local()
+            need_ytdlp()
+            url = safe_http_url(d.get("url"))
+            if not url:
+                raise ApiError("Only http/https links are accepted.")
+            audio = bool(d.get("audio"))
+            names = available_players()
+            name = pick_default_player(names)
+            exe = find_player(name) if name else None
+            if not exe:
+                raise ApiError("No media player found. Install VLC or mpv, or use the browser player.", 503)
+            q = str(d.get("quality") or DEFAULT_QUALITY)
+            dual = PLAYER_SPECS.get(name, {}).get("dual", False)
+            title, video_url, audio_url = resolve_stream(url, q if q in QUALITIES else DEFAULT_QUALITY, dual, audio)
+            if audio:
+                app.stop_audio()
+            proc = launch_detached(build_player_cmd(name, exe, title, video_url, audio_url, audio))
+            if audio:
+                app.audio_proc = proc
+            return self._json({"ok": True, "player": name, "title": title})
+        if path == "/api/config":
+            self._need_local()
+            cfg = load_config()
+            if "watch" in d:
+                if d["watch"] not in ("browser", "desktop"):
+                    raise ApiError("Unknown setting.")
+                cfg["web_watch"] = d["watch"]
+            if "player" in d:
+                if d["player"] not in available_players():
+                    raise ApiError("That player isn't installed.")
+                cfg["player"] = d["player"]
+            save_config(cfg)
+            return self._json({"ok": True})
+        if path == "/api/action":
+            self._need_local()
+            name = d.get("name")
+            if name == "update":
+                return self._json({"id": app.add_task("Update yt-dlp", task_update_ytdlp)})
+            if name == "deno":
+                return self._json({"id": app.add_task("Install Deno", task_install_deno)})
+            raise ApiError("Unknown action.")
+        if path == "/api/test":
+            need_ytdlp()
+            t0 = time.time()
+            try:
+                title, _, _ = resolve_stream(WEB_TEST_URL, "360", False, False)
+                return self._json({"ok": True, "title": title, "secs": round(time.time() - t0, 1)})
+            except Exception as e:
+                return self._json({"ok": False, "error": short_error(e)})
+        self._text(404, "Not found")
+
+    # -- server-sent events --
+
+    def _events(self):
+        app = APP
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Security-Policy", WEB_CSP)
+        self.end_headers()
+        self.close_connection = True
+        last = -1
+        try:
+            while not app.stopping:
+                with app.cond:
+                    if app.version == last:
+                        app.cond.wait(15)
+                    ver = app.version
+                if not self.local and not app.lan_on:
+                    return
+                if ver != last:
+                    self.wfile.write(b"data: " + app.snapshot() + b"\n\n")
+                    last = ver
+                else:
+                    self.wfile.write(b": ping\n\n")
+                self.wfile.flush()
+        except OSError:
+            pass
+
+    # -- files (path-traversal safe, with Range so audio/video can seek) --
+
+    def _file(self, rel, as_download):
+        full = resolve_download_path(rel)
+        if not full:
+            return self._text(404, "Not found")
+        size = os.path.getsize(full)
+        ext = os.path.splitext(full)[1].lower()
+        ctype = EXTRA_MIME.get(ext) or mimetypes.guess_type(full)[0] or "application/octet-stream"
+        extra = [("Accept-Ranges", "bytes")]
+        if as_download:
+            name = os.path.basename(full)
+            ascii_name = re.sub(r'[^A-Za-z0-9._ -]', "_", name)
+            extra.append(("Content-Disposition",
+                          f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{urllib.parse.quote(name)}"))
+        rng = parse_byte_range(self.headers.get("Range"), size)
+        if rng == "bad":
+            return self._send(416, b"", ctype, extra + [("Content-Range", f"bytes */{size}")])
+        code, start, end = (200, 0, size - 1) if rng is None else (206, rng[0], rng[1])
+        if code == 206:
+            extra.append(("Content-Range", f"bytes {start}-{end}/{size}"))
+        length = max(end - start + 1, 0)
+        self.send_response(code)
+        for k, v in [("Content-Type", ctype), ("Content-Length", str(length)), ("Cache-Control", "private, no-cache"),
+                     ("X-Content-Type-Options", "nosniff"), ("Content-Security-Policy", "sandbox")] + extra:
+            self.send_header(k, v)
+        self.end_headers()
+        if self.command == "HEAD" or not length:
+            return
+        try:
+            with open(full, "rb") as f:
+                f.seek(start)
+                left = length
+                while left > 0:
+                    chunk = f.read(min(65536, left))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    left -= len(chunk)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, TimeoutError):
+            self.close_connection = True
+
+
+class WebServer(http.server.ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+# --- tasks that run in the terminal through the same queue ---
+
+def task_update_ytdlp(job):
+    print("\n[web] Updating yt-dlp...\n")
+    code = subprocess.call([sys.executable, "-m", "pip", "install", "-U", "yt-dlp[default]"])
+    if code == 0:
+        job.note = "Updated. Restart snagit --web to use the new version."
+        print("\n[web] yt-dlp updated. Restart snagit --web to use it.\n")
+    return code
+
+
+def task_install_deno(job):
+    print("\n[web] Installing Deno...\n")
+    offer_js_install(ask=False)          # same logic as the terminal menu, just without input()
+    if find_js_runtime()[0]:
+        return 0
+    job.error = "Not detected yet. If the installer finished, open a new terminal and run snagit again."
+    return 1
+
+
+# --- starting everything ---
+
+def print_lan_info(app):
+    ip = app.lan_ips[0] if app.lan_ips else None
+    print("  " + "=" * 60)
+    print("  WARNING: LAN mode is ON. Anyone on this network can reach the page.")
+    print("  They still need the link's token, the PIN, and your approval here.")
+    print("  " + "=" * 60)
+    if not ip:
+        print("  Couldn't work out this computer's network address.\n")
+        return
+    url = f"http://{ip}:{app.port}/?t={app.token}"
+    print(f"  Network: {url}")
+    print(f"  PIN:     {app.pin}   (a new device enters this once)")
+    print(f"  Auto-off after {app.lan_timeout} idle minutes." if app.lan_timeout > 0 else "  Auto-off is disabled.")
+    try:
+        import qrcode
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.print_ascii(invert=True)
+    except Exception:
+        pass    # qrcode is optional (pip install qrcode); the address above works fine
+    if not sys.stdin.isatty():
+        print("  Note: no interactive terminal, so new devices can't be approved.")
+    print()
+
+
+def web_main(args):
+    global VERBOSE, OUTPUT_DIR, APP
+    VERBOSE = args.verbose
+    if args.output:
+        OUTPUT_DIR = os.path.abspath(os.path.expanduser(args.output))
+    if not HAS_YTDLP and not args.check:
+        sys.exit("yt-dlp is required. Install it: pip install -U \"yt-dlp[default]\"  "
+                 "(or run snagit --web --check to install it from the browser)")
+    if HAS_YTDLP:
+        check_requirements(verbose=False)
+    port = args.port or WEB_PORT
+    lan_timeout = WEB_LAN_TIMEOUT if args.lan_timeout is None else args.lan_timeout
+    APP = app = WebApp(port, args.lan, lan_timeout, "check" if args.check else "home")
+    try:
+        httpd = WebServer(("0.0.0.0" if args.lan else "127.0.0.1", port), WebHandler)
+    except OSError as e:
+        sys.exit(f"snagit: can't use port {port} ({e.strerror or e}). Is SnagIt already running? Try --port N")
+
+    threading.Thread(target=app.worker, daemon=True).start()
+    threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.5}, daemon=True).start()
+    if args.lan:
+        threading.Thread(target=app.approver, daemon=True).start()
+        threading.Thread(target=app.watchdog, daemon=True).start()
+
+    local_url = f"http://localhost:{port}/{'check' if args.check else ''}?t={app.token}"
+    print(f"\n  SnagIt web {VERSION}")
+    print(f"  Open:  {local_url}")
+    print(f"  Saving to: {OUTPUT_DIR}")
+    print("  Ctrl+C cancels the running download. Press it twice quickly (or when idle) to quit.\n")
+    if args.lan:
+        print_lan_info(app)
+    if not args.no_open:
+        try:
+            webbrowser.open(local_url)
+        except Exception:
+            pass
+
+    last_int = 0.0
+    while True:
+        try:
+            time.sleep(0.5)
+        except KeyboardInterrupt:
+            now, cur = time.time(), app.current
+            if cur is not None and now - last_int > 2:
+                cur.cancel, last_int = True, now
+                print("\n[web] Cancelling the current job... (Ctrl+C again within 2 seconds quits SnagIt)")
+                app.touch()
+                continue
+            break
+    print("\nStopping SnagIt web. Bye.")
+    app.stopping = True
+    app.stop_audio()
+    httpd.shutdown()
+    httpd.server_close()
+    return 0
+
+
+# ---------- web front end (plain HTML/CSS/JS, served from memory: no build step, no CDN) ----------
+
+INDEX_HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>SnagIt</title><link rel="stylesheet" href="/app.css"></head>
+<body>
+<header>
+  <h1>SnagIt</h1>
+  <nav id="nav">
+    <button data-view="home" class="on">Home</button>
+    <button data-view="queue">Queue <span id="badge" class="badge" hidden></span></button>
+    <button data-view="dl">Downloads</button>
+    <button data-view="check">Requirements</button>
+    <button data-view="set">Settings</button>
+  </nav>
+</header>
+<main>
+<section id="v-home">
+  <div class="box">
+    <input id="box" type="text" autocomplete="off" spellcheck="false" autofocus
+           placeholder="Paste a YouTube link, a playlist link, or type what to search for">
+    <button id="paste" title="Paste from clipboard">Paste</button>
+    <button id="go" class="pri">Go</button>
+  </div>
+  <p class="muted small">Playlist link gives a checklist. Video link gives one card. Anything else is a YouTube search.
+    You can also press Ctrl+V anywhere or drop a link on this page.</p>
+  <div class="row small"><label>Quality for Download buttons
+    <select id="q"></select></label></div>
+  <div id="out"></div>
+</section>
+<section id="v-queue" hidden><h2>Download queue</h2>
+  <p class="muted small">One download runs at a time, in the terminal where <code>snagit --web</code> is running.
+    Closing this tab does not stop anything. Ctrl+C in the terminal cancels the current job.</p>
+  <div id="jobs"></div></section>
+<section id="v-dl" hidden><h2>Downloads</h2>
+  <div class="row"><input id="filter" type="search" placeholder="Filter files">
+    <button id="playall">Play all audio</button><button id="refresh">Refresh</button></div>
+  <p class="muted small" id="dlnote"></p><div id="files"></div></section>
+<section id="v-check" hidden><h2>Requirements</h2>
+  <div id="checks"><p class="muted">Checking...</p></div>
+  <div class="row"><button id="recheck">Check again</button>
+    <button id="upd">Update yt-dlp</button><button id="deno">Install Deno</button>
+    <button id="test" class="pri">Test</button></div>
+  <p id="testout" class="small"></p><div id="lanbox"></div></section>
+<section id="v-set" hidden><h2>Settings</h2>
+  <fieldset><legend>Watch and Audio buttons play in</legend>
+    <label><input type="radio" name="watch" value="browser"> This page (browser)</label>
+    <label><input type="radio" name="watch" value="desktop"> A desktop player on the computer (VLC / mpv)</label>
+    <label>Desktop player <select id="player"></select></label>
+    <p class="muted small" id="setnote"></p></fieldset>
+  <p class="muted small" id="about"></p></section>
+</main>
+<div id="dock" hidden>
+  <video id="vid" controls playsinline hidden></video>
+  <div class="dockbar"><div class="now" id="now">Nothing playing</div>
+    <audio id="aud" controls></audio>
+    <button id="skip">Skip</button><button id="stop">Stop</button></div>
+  <details id="qwrap"><summary id="qsum">Next up (0)</summary><div id="qlist"></div>
+    <button id="qclear" class="small">Clear list</button></details>
+</div>
+<div id="toast" role="status"></div>
+<script src="/app.js" defer></script>
+</body></html>
+"""
+
+PAIR_HTML = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>SnagIt - connect</title><link rel="stylesheet" href="/app.css"></head>
+<body><main class="pair"><h1>SnagIt</h1>
+<p>Enter the 6-digit PIN shown in the terminal on the computer. Then approve this device there.</p>
+<div class="box"><input id="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
+<button id="go" class="pri">Connect</button></div>
+<p id="msg" class="small"></p></main>
+<script src="/pair.js" defer></script></body></html>
+"""
+
+PAIR_JS = r"""
+"use strict";
+const pin = document.getElementById("pin"), msg = document.getElementById("msg"), go = document.getElementById("go");
+async function poll(id) {
+  for (;;) {
+    await new Promise(r => setTimeout(r, 1500));
+    let d = {};
+    try { d = await (await fetch("/pair/status?id=" + encodeURIComponent(id))).json(); } catch (e) { continue; }
+    if (d.state === "allowed") { location.reload(); return; }
+    if (d.state === "denied") { msg.textContent = "The computer said no, or nobody answered in time."; go.disabled = false; return; }
+  }
+}
+go.addEventListener("click", async () => {
+  go.disabled = true; msg.textContent = "";
+  try {
+    const r = await fetch("/pair", { method: "POST", headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ pin: pin.value.trim() }) });
+    const d = await r.json();
+    if (!r.ok) { msg.textContent = d.error || "Failed."; go.disabled = false; return; }
+    msg.textContent = "Waiting for approval on the computer...";
+    poll(d.pending);
+  } catch (e) { msg.textContent = "Can't reach the computer."; go.disabled = false; }
+});
+pin.addEventListener("keydown", e => { if (e.key === "Enter") go.click(); });
+"""
+
+APP_CSS = r"""
+:root{--bg:#fff;--fg:#1b1b21;--mut:#6a6a76;--card:#f3f3f7;--line:#d9d9e1;--acc:#0b8fb3;--acc2:#c22a9c;--ok:#188a45;--bad:#c93636;color-scheme:light dark}
+@media (prefers-color-scheme:dark){:root{--bg:#141418;--fg:#ececf1;--mut:#9a9aa8;--card:#1f1f26;--line:#34343e;--acc:#35c7ea;--acc2:#ff4fd0;--ok:#43c777;--bad:#ff6b6b}}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-bottom:5.5rem}
+header{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1.2rem;padding:.7rem 1rem;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
+h1{margin:0;font-size:1.4rem;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
+h2{margin:.2rem 0 .6rem}h3{margin:0;font-size:1rem;overflow-wrap:anywhere}
+nav{display:flex;flex-wrap:wrap;gap:.3rem}
+main{max-width:980px;margin:0 auto;padding:1rem}
+button,select,input[type=text],input[type=search],input:not([type]){font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.45rem .75rem}
+button{cursor:pointer}button:hover{border-color:var(--acc)}button:disabled{opacity:.5;cursor:default}
+button.on{border-color:var(--acc);color:var(--acc)}button.pri{background:var(--acc);border-color:var(--acc);color:#04222b;font-weight:600}
+code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
+.box{display:flex;gap:.5rem}.box input{flex:1;min-width:0}
+.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0}
+.muted{color:var(--mut)}.small{font-size:.85rem}.err{color:var(--bad)}.ok{color:var(--ok)}
+.badge{background:var(--acc2);color:#fff;border-radius:99px;padding:0 .45rem;font-size:.75rem}
+.card{display:flex;gap:.8rem;padding:.6rem;margin:.6rem 0;background:var(--card);border-radius:10px}
+.card img{width:168px;height:94px;object-fit:cover;border-radius:6px;flex:none;background:var(--line)}
+.info{min-width:0;flex:1}.btns{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem}.btns button{padding:.3rem .6rem}
+.tools{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.6rem 0;position:sticky;top:3.4rem;background:var(--bg);padding:.4rem 0;z-index:4}
+.tools .grow{flex:1;min-width:8rem}
+.pl{display:flex;gap:.6rem;align-items:center;padding:.35rem .4rem;border-bottom:1px solid var(--line);user-select:none;cursor:pointer}
+.pl:hover{background:var(--card)}.pl img{width:80px;height:45px;object-fit:cover;border-radius:4px;flex:none;background:var(--line)}
+.pl .n{width:2.6rem;text-align:right;color:var(--mut);flex:none;font-variant-numeric:tabular-nums}
+.pl .t{flex:1;min-width:0;overflow-wrap:anywhere}.pl .d{color:var(--mut);flex:none}
+.job{padding:.6rem;margin:.5rem 0;background:var(--card);border-radius:10px}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:.4rem 0}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+.pill{font-size:.75rem;border:1px solid var(--line);border-radius:99px;padding:0 .5rem;margin-left:.4rem}
+.chk{display:flex;gap:.6rem;align-items:baseline;padding:.3rem 0;border-bottom:1px solid var(--line)}
+.chk b{min-width:5.5rem;font-family:ui-monospace,monospace}.file{display:flex;flex-wrap:wrap;gap:.4rem .8rem;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--line)}
+.file .nm{flex:1;min-width:12rem;overflow-wrap:anywhere}.file a,.file button{font-size:.85rem}
+a{color:var(--acc)}
+fieldset{border:1px solid var(--line);border-radius:10px;display:grid;gap:.5rem}
+#dock{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:.5rem .8rem;z-index:9}
+#vid{width:100%;max-height:45vh;background:#000;border-radius:8px}
+.dockbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}.now{flex:1 1 12rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
+#aud{flex:2 1 14rem;height:36px;min-width:0}
+#qlist .qi{display:flex;gap:.4rem;align-items:center;padding:.2rem 0}#qlist .qi span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#toast{position:fixed;left:50%;bottom:6rem;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:.5rem 1rem;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;z-index:20}
+#toast.show{opacity:1}#toast.bad{background:var(--bad);color:#fff}
+.pair{max-width:26rem;margin:15vh auto 0}.pair input{font-size:1.4rem;letter-spacing:.3rem;text-align:center}
+@media (max-width:600px){.card{flex-direction:column}.card img{width:100%;height:auto;aspect-ratio:16/9}main{padding:.7rem}}
+"""
+
+APP_JS = r"""
+"use strict";
+const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+function h(tag, a, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in a || {}) {
+    const v = a[k];
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(c)); }
+  return e;
+}
+const S = { cfg: { watch: "browser", player: "", players: [] }, local: true, quals: [], dq: "720", jobs: [], files: [], lan: {} };
+let toastT;
+function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.className = "show" + (bad ? " bad" : ""); clearTimeout(toastT); toastT = setTimeout(() => t.className = "", 3800); }
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  if (!r.ok || d.error) throw new Error(d.error || ("HTTP " + r.status));
+  return d;
+}
+const pad = n => String(n).padStart(2, "0");
+const fmtDur = s => { if (!s) return "--:--"; s = Math.floor(s); const H = Math.floor(s / 3600), M = Math.floor(s % 3600 / 60), X = s % 60; return H ? `${H}:${pad(M)}:${pad(X)}` : `${M}:${pad(X)}`; };
+const fmtViews = n => { if (n == null) return ""; for (const [d, x] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]]) if (n >= d) return (n / d).toFixed(1).replace(".0", "") + x + " views"; return n + " views"; };
+const fmtSize = n => { for (const u of ["B", "KB", "MB", "GB"]) { if (n < 1024 || u === "GB") return (u === "B" ? n : n.toFixed(1)) + " " + u; n /= 1024; } };
+const thumb = id => "https://i.ytimg.com/vi/" + encodeURIComponent(id) + "/mqdefault.jpg";
+const encPath = p => p.split("/").map(encodeURIComponent).join("/");
+
+// ---------- views ----------
+function show(v) {
+  for (const s of $$("main > section")) s.hidden = s.id !== "v-" + v;
+  for (const b of $$("#nav button")) b.classList.toggle("on", b.dataset.view === v);
+  try { history.replaceState(null, "", v === "check" ? "/check" : "/"); } catch (e) {}
+  if (v === "dl") loadFiles();
+  if (v === "check") loadCheck();
+  if (v === "set") renderSettings();
+}
+for (const b of $$("#nav button")) b.addEventListener("click", () => show(b.dataset.view));
+
+// ---------- the one box ----------
+let seq = 0;
+async function go(text) {
+  text = (text || "").trim(); if (!text) return;
+  $("#box").value = text; show("home");
+  const out = $("#out"), my = ++seq;
+  out.replaceChildren(h("p", { class: "muted" }, "Looking..."));
+  try {
+    const d = await api("/api/lookup?q=" + encodeURIComponent(text));
+    if (my !== seq) return;
+    if (d.kind === "search") renderSearch(d);
+    else if (d.kind === "playlist") renderPlaylist(d);
+    else out.replaceChildren(card(d.item));
+  } catch (e) { if (my === seq) out.replaceChildren(h("p", { class: "err" }, e.message)); }
+}
+$("#go").addEventListener("click", () => go($("#box").value));
+$("#box").addEventListener("keydown", e => { if (e.key === "Enter") go(e.target.value); });
+$("#box").addEventListener("paste", () => setTimeout(() => { if (/^https?:\/\//i.test($("#box").value.trim())) go($("#box").value); }, 0));
+$("#paste").addEventListener("click", async () => {
+  try { const t = await navigator.clipboard.readText(); t ? go(t) : toast("The clipboard is empty."); }
+  catch (e) { $("#box").focus(); toast("Can't read the clipboard here. Paste into the box instead (long-press on a phone).", true); }
+});
+document.addEventListener("paste", e => {
+  const t = e.target; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  const txt = e.clipboardData && e.clipboardData.getData("text"); if (txt) { e.preventDefault(); go(txt); }
+});
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => {
+  e.preventDefault(); const dt = e.dataTransfer; if (!dt) return;
+  const raw = dt.getData("text/uri-list") || dt.getData("text/plain") || "";
+  const line = raw.split(/\r?\n/).find(l => l.trim() && !l.startsWith("#")); if (line) go(line);
+});
+
+// ---------- cards ----------
+async function queueDownload(body, label) {
+  try { const d = await api("/api/download", body); toast(`Queued as job #${d.id}${label ? ": " + label : ""}. It runs in the terminal.`); }
+  catch (e) { toast(e.message, true); }
+}
+const dlVideo = (it, q) => queueDownload({ kind: "video", url: it.url, quality: q, title: it.title }, it.title);
+function card(it) {
+  const meta = [it.channel, it.live ? "LIVE" : fmtDur(it.duration), fmtViews(it.views)].filter(Boolean).join(" | ");
+  const b = (t, f, title) => h("button", { onclick: f, title }, t);
+  return h("article", { class: "card" },
+    h("img", { src: thumb(it.id), alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: e => e.target.style.visibility = "hidden" }),
+    h("div", { class: "info" }, h("h3", {}, it.title), h("div", { class: "muted small" }, meta),
+      h("div", { class: "btns" },
+        b("Watch", () => play(it, false)), b("Audio", () => play(it, true)),
+        b("Download", () => dlVideo(it, $("#q").value)), b("MP3", () => dlVideo(it, "mp3")),
+        b("+ Queue", () => addQ(trackOf(it), false), "Add to the Next up list"),
+        b("Next", () => addQ(trackOf(it), true), "Play next"))));
+}
+function renderSearch(d) {
+  const out = $("#out"), list = h("div"), more = h("button", {}, "Load more");
+  let offset = 0;
+  const add = r => { offset += r.items.length; r.items.forEach(it => list.append(card(it))); more.hidden = !r.more || !r.items.length;
+    if (!offset) list.append(h("p", { class: "muted" }, "No results.")); };
+  more.addEventListener("click", async () => {
+    more.disabled = true;
+    try { add(await api(`/api/search?q=${encodeURIComponent(d.query)}&offset=${offset}`)); } catch (e) { toast(e.message, true); }
+    more.disabled = false;
+  });
+  out.replaceChildren(h("p", { class: "muted small" }, `Results for "${d.query}"`), list, more); add(d);
+}
+
+// ---------- playlist ----------
+function parseRange(t, total) {
+  t = t.replace(/\s+/g, "");
+  if (!/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(t)) return null;
+  const out = new Set();
+  for (const p of t.split(",")) {
+    let a, b;
+    if (p.includes("-")) { [a, b] = p.split("-").map(Number); } else { a = b = Number(p); }
+    if (a < 1 || b < a || b - a > 100000) return null;
+    for (let k = a, hi = total ? Math.min(b, total) : b; k <= hi; k++) out.add(k);
+  }
+  return out;
+}
+function renderPlaylist(d) {
+  const pl = { url: d.url, total: d.count || null, sel: new Set(), last: null, all: false, more: d.has_more, next: 1 };
+  const list = h("div"), moreBtn = h("button", {}, "Load more");
+  const qsel = h("select", {}, ...[...S.quals, "mp3"].map(q => h("option", { value: q }, q === "mp3" ? "MP3 (audio)" : q + "p")));
+  qsel.value = $("#q").value;
+  const cnt = h("strong", {}, "0 selected"), rng = h("input", { type: "text", class: "grow", placeholder: "Range, e.g. 1-5,8,10-12" });
+  const boxes = new Map();
+  const upd = () => { cnt.textContent = pl.all && !pl.total && pl.more ? "All selected" : pl.sel.size + " selected"; };
+  const sync = () => { for (const [i, cb] of boxes) cb.checked = pl.sel.has(i); upd(); };
+  const rows = items => items.forEach(it => {
+    const cb = h("input", { type: "checkbox" }); cb.checked = pl.sel.has(it.index); boxes.set(it.index, cb);
+    cb.addEventListener("click", ev => {
+      pl.all = false;
+      if (ev.shiftKey && pl.last != null) { const a = Math.min(pl.last, it.index), z = Math.max(pl.last, it.index);
+        for (let k = a; k <= z; k++) cb.checked ? pl.sel.add(k) : pl.sel.delete(k); sync(); }
+      else cb.checked ? pl.sel.add(it.index) : pl.sel.delete(it.index);
+      pl.last = it.index; upd();
+    });
+    list.append(h("label", { class: "pl" }, cb, h("span", { class: "n" }, it.index),
+      h("img", { src: thumb(it.id), alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: e => e.target.style.visibility = "hidden" }),
+      h("span", { class: "t" }, it.title), h("span", { class: "d" }, fmtDur(it.duration))));
+    pl.next = it.index + 1;
+  });
+  const selectAll = () => {
+    pl.sel = new Set(); pl.all = true;
+    if (pl.total) for (let k = 1; k <= pl.total; k++) pl.sel.add(k); else for (const i of boxes.keys()) pl.sel.add(i);
+    sync();
+  };
+  const load = r => { rows(r.items); pl.more = r.has_more; if (r.count) pl.total = r.count; moreBtn.hidden = !pl.more;
+    if (pl.all && !pl.total) for (const i of boxes.keys()) pl.sel.add(i); sync(); };
+  moreBtn.addEventListener("click", async () => {
+    moreBtn.disabled = true;
+    try { load(await api(`/api/playlist?url=${encodeURIComponent(pl.url)}&start=${pl.next}`)); } catch (e) { toast(e.message, true); }
+    moreBtn.disabled = false;
+  });
+  const apply = () => { const s = parseRange(rng.value, pl.total); if (!s) { toast("Use a range like 1-5,8,10-12", true); return; }
+    pl.sel = s; pl.all = false; sync(); };
+  rng.addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
+  const dlBtn = h("button", { class: "pri", onclick: () => {
+    if (!pl.sel.size && !pl.all) return toast("Tick at least one video first.", true);
+    const body = { kind: "playlist", url: pl.url, quality: qsel.value, title: d.title };
+    if (pl.all && !pl.total && pl.more) body.all = true; else body.indices = [...pl.sel];
+    queueDownload(body, d.title);
+  } }, "Download");
+  $("#out").replaceChildren(
+    h("h2", {}, d.title), h("p", { class: "muted small" }, (pl.total ? pl.total + " videos" : "Playlist") + ". Shift-click selects a range."),
+    h("div", { class: "tools" }, qsel, h("button", { onclick: selectAll }, "Select all"),
+      h("button", { onclick: () => { pl.sel = new Set(); pl.all = false; sync(); } }, "Select none"),
+      rng, h("button", { onclick: apply }, "Tick range"), cnt, dlBtn),
+    list, moreBtn);
+  rows(d.items); moreBtn.hidden = !pl.more; upd();
+}
+
+// ---------- queue page (live via server-sent events) ----------
+function renderJobs() {
+  const jobs = S.jobs.slice().reverse(), active = S.jobs.filter(j => j.status === "queued" || j.status === "running").length;
+  const badge = $("#badge"); badge.hidden = !active; badge.textContent = active;
+  const box = $("#jobs");
+  if (!jobs.length) return box.replaceChildren(h("p", { class: "muted" }, "Nothing queued yet."));
+  box.replaceChildren(...jobs.map(j => {
+    const bar = h("i"); if (j.pct != null) bar.style.width = j.pct + "%"; else if (j.status === "done") bar.style.width = "100%";
+    const line = j.status === "running"
+      ? [j.idx && j.n ? `[${j.idx}/${j.n}] ` : "", j.title || "", j.pct != null ? `  ${j.pct}%` : "", j.speed ? `  ${j.speed}` : "", j.eta ? `  ETA ${j.eta}` : "", j.phase && j.phase !== "downloading" ? `  (${j.phase})` : ""].join("")
+      : j.status === "done" ? (j.done ? `${j.done} saved` : "Finished") + (j.note ? ". " + j.note : "") : j.error || "";
+    return h("div", { class: "job" }, h("div", {}, h("strong", {}, `#${j.id} ${j.label}`), h("span", { class: "pill" }, j.status === "running" ? "running" : j.status),
+      j.status === "queued" ? h("button", { class: "small", onclick: () => api("/api/cancel", { id: j.id }) }, "Remove") : null),
+      h("div", { class: "bar" }, bar), h("div", { class: "muted small" }, line));
+  }));
+}
+let prevStatus = {};
+function onJobs(jobs) {
+  for (const j of jobs) { const p = prevStatus[j.id];
+    if (p && p !== j.status && j.status === "done") toast(`Finished: ${j.label}`);
+    if (p && p !== j.status && j.status === "failed") toast(`Failed: ${j.label}`, true);
+    prevStatus[j.id] = j.status; }
+  S.jobs = jobs; renderJobs();
+}
+function listen() {
+  const es = new EventSource("/api/events");
+  es.onmessage = e => { const d = JSON.parse(e.data); onJobs(d.jobs); };
+  es.onerror = () => { if (es.readyState === 2) setTimeout(listen, 5000); };
+}
+
+// ---------- player dock + "next up" list ----------
+const P = { q: [], now: null };
+try { P.q = JSON.parse(localStorage.getItem("snagit_q") || "[]").filter(t => t && t.title); } catch (e) {}
+const trackOf = (it, audio = true) => ({ title: it.title, url: it.url, audio });
+function saveQ() { try { localStorage.setItem("snagit_q", JSON.stringify(P.q)); } catch (e) {} }
+function renderDock() {
+  const has = P.now || P.q.length; $("#dock").hidden = !has;
+  $("#now").textContent = P.now ? P.now.title : "Nothing playing";
+  $("#qsum").textContent = `Next up (${P.q.length})`;
+  $("#qlist").replaceChildren(...P.q.map((t, i) => h("div", { class: "qi" }, h("span", {}, `${i + 1}. ${t.title}`),
+    h("button", { onclick: () => { P.q.splice(i, 1); saveQ(); renderDock(); start(t); } }, "Play"),
+    h("button", { onclick: () => { P.q.splice(i, 1); saveQ(); renderDock(); } }, "x"))));
+  $("#qclear").hidden = !P.q.length;
+}
+function addQ(t, front) {
+  front ? P.q.unshift(t) : P.q.push(t); saveQ(); renderDock();
+  toast(front ? "Playing next" : "Added to Next up");
+  if (!P.now) next();
+}
+function stopMedia() { for (const el of [$("#aud"), $("#vid")]) { el.pause(); el.removeAttribute("src"); el.load(); } }
+async function start(t) {
+  P.now = t; renderDock(); stopMedia();
+  const el = t.audio ? $("#aud") : $("#vid"); $("#vid").hidden = t.audio;
+  $("#now").textContent = "Loading: " + t.title;
+  try {
+    el.src = t.src || (await api("/api/stream", { url: t.url, audio: t.audio, quality: $("#q").value })).url;
+    $("#now").textContent = t.title; await el.play();
+  } catch (e) { if (P.now === t) { toast("Couldn't play that: " + e.message, true); renderDock(); } }
+}
+function next() {
+  if (P.q.length) { const t = P.q.shift(); saveQ(); start(t); }
+  else { P.now = null; stopMedia(); $("#vid").hidden = true; renderDock(); }
+}
+for (const el of [$("#aud"), $("#vid")]) {
+  el.addEventListener("ended", next);
+  el.addEventListener("error", () => { if (P.now && el.getAttribute("src")) { toast("This one won't play in the browser. Skipping.", true); next(); } });
+}
+$("#skip").addEventListener("click", next);
+$("#stop").addEventListener("click", () => { P.q.length = 0; saveQ(); next(); });
+$("#qclear").addEventListener("click", () => { P.q.length = 0; saveQ(); renderDock(); });
+async function play(it, audio) {
+  if (S.cfg.watch === "desktop" && S.local) {
+    try { const d = await api("/api/play", { url: it.url, audio, quality: $("#q").value }); toast(`Playing in ${d.player}`); }
+    catch (e) { toast(e.message, true); }
+  } else start(trackOf(it, audio));
+}
+
+// ---------- downloads page ----------
+async function loadFiles() {
+  try { S.files = (await api("/api/downloads")).files; renderFiles(); } catch (e) { $("#files").replaceChildren(h("p", { class: "err" }, e.message)); }
+}
+const fileTrack = f => ({ title: f.name.replace(/\.[^.]+$/, ""), src: "/files/" + encPath(f.path), audio: f.audio });
+function renderFiles() {
+  const q = $("#filter").value.trim().toLowerCase(), list = S.files.filter(f => !q || f.path.toLowerCase().includes(q));
+  $("#dlnote").textContent = `${list.length} file(s). Saved in ${S.output_dir || ""}`;
+  $("#files").replaceChildren(...list.map(f => h("div", { class: "file" },
+    h("div", { class: "nm" }, f.folder ? h("span", { class: "muted" }, f.folder + " / ") : null, f.name),
+    h("span", { class: "muted small" }, fmtSize(f.size)),
+    h("button", { onclick: () => start(fileTrack(f)) }, "Play"),
+    f.audio ? h("button", { onclick: () => addQ(fileTrack(f), false) }, "+ Queue") : null,
+    h("a", { href: "/files/" + encPath(f.path) + "?dl=1", download: f.name }, "Save"))));
+  if (!list.length) $("#files").replaceChildren(h("p", { class: "muted" }, "No finished files yet."));
+}
+$("#filter").addEventListener("input", renderFiles);
+$("#refresh").addEventListener("click", loadFiles);
+$("#playall").addEventListener("click", () => {
+  const a = S.files.filter(f => f.audio && (!$("#filter").value || f.path.toLowerCase().includes($("#filter").value.toLowerCase())));
+  if (!a.length) return toast("No audio files to play.", true);
+  a.forEach(f => P.q.push(fileTrack(f))); saveQ(); renderDock(); if (!P.now) next();
+});
+
+// ---------- requirements page ----------
+async function loadCheck() {
+  const box = $("#checks"); box.replaceChildren(h("p", { class: "muted" }, "Checking..."));
+  try {
+    const d = await api("/api/check");
+    box.replaceChildren(...d.checks.map(c => h("div", { class: "chk" }, h("b", { class: c.ok ? "ok" : "err" }, c.ok ? "[ALRIGHT]" : "[JACK]"),
+      h("span", {}, c.label, c.detail ? h("span", { class: "muted" }, "  " + c.detail) : null, !c.ok ? h("div", { class: "muted small" }, "-> " + c.fix) : null))));
+    const lb = $("#lanbox"); lb.replaceChildren();
+    if (d.lan) lb.append(h("h3", {}, "LAN mode"),
+      h("p", { class: "small" }, d.lan.on ? "On. " : "Off (idle timeout reached). ", d.lan.address ? "Address: " + d.lan.address + " (use the full link with the token from the terminal). " : "",
+        "Anyone on your network can reach the page, but they need the token, the PIN and your approval."),
+      h("p", { class: "muted small" }, "Firewall: " + d.lan.firewall));
+  } catch (e) { box.replaceChildren(h("p", { class: "err" }, e.message)); }
+}
+$("#recheck").addEventListener("click", loadCheck);
+$("#test").addEventListener("click", async () => {
+  const out = $("#testout"); out.className = "small muted"; out.textContent = "Testing a short video...";
+  try { const d = await api("/api/test", {});
+    out.className = "small " + (d.ok ? "ok" : "err");
+    out.textContent = d.ok ? `Works. Resolved "${d.title}" in ${d.secs}s.` : "Failed: " + d.error;
+  } catch (e) { out.className = "small err"; out.textContent = e.message; }
+});
+for (const [id, name] of [["upd", "update"], ["deno", "deno"]]) $("#" + id).addEventListener("click", async () => {
+  try { const d = await api("/api/action", { name }); toast(`Started as job #${d.id}. Watch the terminal.`); show("queue"); }
+  catch (e) { toast(e.message, true); }
+});
+
+// ---------- settings ----------
+function renderSettings() {
+  const c = S.cfg, ps = $("#player");
+  for (const r of $$("input[name=watch]")) { r.checked = r.value === c.watch; r.disabled = !S.local && r.value === "desktop"; }
+  ps.replaceChildren(...(c.players.length ? c.players.map(p => h("option", { value: p }, p)) : [h("option", { value: "" }, "none found")]));
+  ps.value = c.player || ""; ps.disabled = !S.local || !c.players.length;
+  $("#setnote").textContent = !S.local ? "Desktop players can only be chosen on the computer itself. This device uses the browser player."
+    : c.players.length ? "Saved automatically." : "No VLC or mpv found, so the browser player is used.";
+  $("#about").textContent = `SnagIt ${S.version}. Files are saved in ${S.output_dir}.`;
+}
+for (const r of $$("input[name=watch]")) r.addEventListener("change", async () => {
+  try { await api("/api/config", { watch: r.value }); S.cfg.watch = r.value; toast("Saved"); } catch (e) { toast(e.message, true); renderSettings(); }
+});
+$("#player").addEventListener("change", async e => {
+  try { await api("/api/config", { player: e.target.value }); S.cfg.player = e.target.value; toast("Saved"); } catch (er) { toast(er.message, true); }
+});
+
+// ---------- start ----------
+(async function init() {
+  try {
+    const st = await api("/api/state");
+    Object.assign(S, { cfg: st.config, local: st.local, quals: st.qualities, dq: st.default_quality, version: st.version, output_dir: st.output_dir });
+    if (!S.local) S.cfg.watch = "browser";
+    $("#q").replaceChildren(...S.quals.map(q => h("option", { value: q }, q + "p"))); $("#q").value = S.dq;
+    if (!st.has_ytdlp) toast("yt-dlp is missing. Open Requirements and press Update yt-dlp.", true);
+    renderDock(); renderJobs(); listen();
+    show(location.pathname === "/check" || st.start_view === "check" ? "check" : "home");
+  } catch (e) { $("#out").replaceChildren(h("p", { class: "err" }, "Can't reach SnagIt: " + e.message)); }
+})();
+"""
+
+
 # ---------- command line (one-liner) mode ----------
 
 def range_arg(text):
@@ -1316,7 +2842,10 @@ def build_parser():
                "  snagit -s lofi hip hop         search YouTube, browse results, watch\n"
                "  snagit -s lofi -P mpv -q 1080  same, using mpv at 1080p\n"
                "  snagit -s song name -a -f      play the top result as audio only, no list\n"
-               "  snagit -s song name -a         browse results, Enter plays just the audio\n\n"
+               "  snagit -s song name -a         browse results, Enter plays just the audio\n"
+               "  snagit --web                   local web interface (paste a link or type a search)\n"
+               "  snagit --web --check           web interface, straight to the requirements page\n"
+               "  snagit --web --lan             also reachable from a phone on the same Wi-Fi\n\n"
                f"made by Echo404 - Twitter: {TWITTER}\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1345,6 +2874,16 @@ def build_parser():
                    help="search mode: don't show thumbnails")
     p.add_argument("-i", "--interactive", action="store_true",
                    help="force the interactive menu")
+    p.add_argument("--web", action="store_true",
+                   help=f"start the local web interface (http://localhost:{WEB_PORT}/)")
+    p.add_argument("--port", type=int, metavar="N", help=f"with --web: fixed port (default: {WEB_PORT})")
+    p.add_argument("--no-open", action="store_true", help="with --web: don't open the browser automatically")
+    p.add_argument("--check", action="store_true", help="with --web: open straight to the requirements page")
+    p.add_argument("--lan", action="store_true",
+                   help="with --web: also listen on the local network (phone on the same Wi-Fi). "
+                        "Needs a PIN and your approval for each device")
+    p.add_argument("--lan-timeout", type=int, metavar="M",
+                   help=f"with --lan: turn LAN access off after M idle minutes (default: {WEB_LAN_TIMEOUT}, 0 = never)")
     p.add_argument("-V", "--version", action="version", version=f"SnagIt {VERSION}")
     return p
 
@@ -1382,6 +2921,20 @@ def main():
     args = parser.parse_args()
     if args.first and args.search is None:
         parser.error("-f/--first needs -s/--search")
+    web_only = [n for n, v in (("--port", args.port), ("--no-open", args.no_open), ("--check", args.check),
+                               ("--lan", args.lan), ("--lan-timeout", args.lan_timeout)) if v]
+    if web_only and not args.web:
+        parser.error(f"{', '.join(web_only)} need --web")
+    if args.lan_timeout is not None and not args.lan:
+        parser.error("--lan-timeout needs --lan")
+    if args.port is not None and not 1 <= args.port <= 65535:
+        parser.error("--port must be between 1 and 65535")
+    if args.lan_timeout is not None and args.lan_timeout < 0:
+        parser.error("--lan-timeout can't be negative")
+    if args.web:
+        if args.url or args.search is not None or args.interactive:
+            parser.error("--web can't be combined with a link, -s or -i")
+        sys.exit(web_main(args))
     if args.search is not None:
         sys.exit(search_main(args))
     if args.interactive or len(sys.argv) == 1:
