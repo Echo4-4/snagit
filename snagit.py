@@ -13,6 +13,7 @@ Run:
   python snagit.py                      interactive menu
   python snagit.py URL -q 720           one-liner (see: python snagit.py --help)
   python snagit.py -s lofi beats        search YouTube and watch in VLC/mpv
+  python snagit.py -s song name -a -f   play the top result as audio only
 
 Optional (for search thumbnails):
   pip install Pillow
@@ -54,7 +55,7 @@ except ImportError:
     yt_dlp = None
     HAS_YTDLP = False
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 TWITTER = "@JeffreyPeter_"
 QUALITIES = ("360", "480", "720", "1080")
 DEFAULT_QUALITY = "720"
@@ -610,10 +611,12 @@ def short_error(ex):
     return (text.splitlines() or [type(ex).__name__])[0][:150]
 
 
-def resolve_stream(url, quality, dual):
+def resolve_stream(url, quality, dual, audio_only=False):
     """Asks yt-dlp for direct stream URLs. Returns (title, video_url, audio_url or None)."""
     opts = {"quiet": True, "no_warnings": True, "noplaylist": True, "logger": QuietLogger()}
-    if dual:
+    if audio_only:
+        opts["format"] = "bestaudio/best"
+    elif dual:
         opts["format"] = "bv*+ba/b"
         opts["format_sort"] = [f"res:{quality}", "ext:mp4:m4a"]
     else:
@@ -625,6 +628,8 @@ def resolve_stream(url, quality, dual):
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=False)
     fmts = info.get("requested_formats") or [info]
+    if audio_only:
+        return info.get("title") or url, fmts[0]["url"], None
     has_v = lambda f: f.get("vcodec") not in (None, "none")
     has_a = lambda f: f.get("acodec") not in (None, "none")
     video = next((f for f in fmts if has_v(f)), fmts[0])
@@ -632,19 +637,26 @@ def resolve_stream(url, quality, dual):
     return info.get("title") or url, video["url"], (audio["url"] if audio else None)
 
 
-def build_player_cmd(name, exe, title, video_url, audio_url):
+def build_player_cmd(name, exe, title, video_url, audio_url, audio_only=False):
     if name == "vlc":
         cmd = [exe]
+        if audio_only:
+            cmd += ["--no-video", "--play-and-exit"]
         if audio_url:
             cmd.append("--input-slave=" + audio_url)
         return cmd + ["--meta-title=" + title, video_url]
     if name == "mpv":
         cmd = [exe, "--ytdl=no", "--force-media-title=" + title]
+        if audio_only:
+            cmd.append("--no-video")
         if audio_url:
             cmd.append("--audio-file=" + audio_url)
         return cmd + [video_url]
     if name == "ffplay":
-        return [exe, "-autoexit", "-window_title", title, video_url]
+        cmd = [exe, "-autoexit", "-window_title", title]
+        if audio_only:
+            cmd.append("-nodisp")
+        return cmd + [video_url]
     return [exe, video_url]   # iina and any custom player: just hand it the URL
 
 
@@ -826,7 +838,9 @@ class Terminal:
 class SearchSession:
     """Holds the search results, cursor position and background loaders."""
 
-    def __init__(self, query, quality, players, player, thumbs):
+    def __init__(self, query, quality, players, player, thumbs, audio_only=False):
+        self.audio_only = audio_only
+        self.proc = None                       # the audio player started from this list (if any)
         self.query = query
         self.quality = quality
         self.players = players
@@ -948,21 +962,41 @@ class SearchSession:
         if not exe:
             self.set_status(f"Can't find {self.player} anymore. Press p to switch player.")
             return
-        threading.Thread(target=self._play, args=(entry, self.player, exe, self.quality),
+        threading.Thread(target=self._play, args=(entry, self.player, exe, self.quality, self.audio_only),
                          daemon=True).start()
 
-    def _play(self, entry, name, exe, quality):
+    def toggle_audio(self):
+        self.audio_only = not self.audio_only
+        self.set_status("Audio only: Enter now plays just the sound" if self.audio_only
+                        else "Video mode: Enter opens the video")
+
+    def stop(self):
+        """Stops the audio started from this list. Returns True if something was playing."""
+        proc, self.proc = self.proc, None
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+            return True
+        return False
+
+    def _play(self, entry, name, exe, quality, audio_only):
         self.set_status(f"Getting stream: {entry['title']}")
         try:
             dual = PLAYER_SPECS.get(name, {}).get("dual", False)
-            title, video_url, audio_url = resolve_stream(entry["url"], quality, dual)
-            proc = launch_detached(build_player_cmd(name, exe, title, video_url, audio_url))
+            title, video_url, audio_url = resolve_stream(entry["url"], quality, dual, audio_only)
+            if audio_only:
+                self.stop()                    # one song at a time
+            proc = launch_detached(build_player_cmd(name, exe, title, video_url, audio_url, audio_only))
+            if audio_only:
+                self.proc = proc
             time.sleep(1.5)
             code = proc.poll()
             if code not in (None, 0):
                 self.set_status(f"{name} closed right away (exit code {code}). Try another player with p.")
             else:
-                self.set_status(f"Playing in {name}: {title}")
+                self.set_status(f"Playing {'audio' if audio_only else 'video'} in {name}: {title}")
         except Exception as ex:
             self.set_status(f"Could not play: {short_error(ex)}")
 
@@ -1010,7 +1044,7 @@ def build_frame(s):
         s.top = s.cursor - s.vis + 1
 
     # header bar
-    right = f" player: {s.player or 'none'} | quality: {s.quality}p "
+    right = f" player: {s.player or 'none'} | {'audio only' if s.audio_only else f'quality: {s.quality}p'} "
     left, used = fit(f" SnagIt search: {s.query}", max(cols - len(right), 10))
     header = f"\033[7m{left}{' ' * max(cols - used - len(right), 0)}{right}\033[0m"
     lines = [header, "-" * cols]
@@ -1031,7 +1065,7 @@ def build_frame(s):
     # footer
     pos = f"{min(s.cursor + 1, total)}/{total}{'' if s.exhausted else '+'}"
     status, _ = fit(f" {pos}   {s.status}", cols)
-    keys, _ = fit(" Up/Down move | Enter watch | p player | u quality | d download | m mp3 | / search | q quit",
+    keys, _ = fit(" q quit | Enter play | a audio | s stop | p player | / search | d save | m mp3 | u quality",
                   cols)
     lines += [status, f"\033[2m{keys}\033[0m"]
     return "\033[H" + "\033[K\n".join(lines) + "\033[K\033[J"
@@ -1072,6 +1106,10 @@ def browse(s, term):
             s.cursor = last
         elif key == "enter" and n:
             s.play(s.results[s.cursor])
+        elif key == "a":
+            s.toggle_audio()
+        elif key == "s":
+            s.set_status("Stopped." if s.stop() else "Nothing is playing from this list.")
         elif key == "p":
             s.cycle_player()
         elif key == "u":
@@ -1085,7 +1123,7 @@ def browse(s, term):
         s.touch()
 
 
-def search_flow(query, quality=None, player=None, thumbs=True):
+def search_flow(query, quality=None, player=None, thumbs=True, audio_only=False):
     if not (sys.stdin.isatty() and sys.stdout.isatty()):
         sys.exit("Search mode needs an interactive terminal.")
     players = available_players(player)
@@ -1099,7 +1137,7 @@ def search_flow(query, quality=None, player=None, thumbs=True):
     use_thumbs = thumbs and HAS_PIL and encodable and "NO_COLOR" not in os.environ
 
     def new_session(q):
-        s = SearchSession(q, quality, players, current, use_thumbs)
+        s = SearchSession(q, quality, players, current, use_thumbs, audio_only)
         if thumbs and not use_thumbs:
             s.status = "Thumbnails off (install Pillow: pip install Pillow)" if not HAS_PIL else "Thumbnails off"
         if not players:
@@ -1107,29 +1145,68 @@ def search_flow(query, quality=None, player=None, thumbs=True):
         return s
 
     session = new_session(query)
-    while True:
-        with Terminal() as term:
-            action, entry = browse(session, term)
-        quality, current = session.quality, session.player
-        if action == "quit":
-            return 0
-        if action == "search":
-            text = input("Search YouTube (empty = back to the list): ").strip()
-            if text:
-                session = new_session(text)
-            continue
-        try:
-            if action == "download":
+    try:
+        while True:
+            with Terminal() as term:
+                action, entry = browse(session, term)
+            quality, current, audio_only = session.quality, session.player, session.audio_only
+            if action == "quit":
+                return 0
+            if action == "search":
+                text = input("Search YouTube (empty = back to the list): ").strip()
+                if text:
+                    session.stop()
+                    session = new_session(text)
+                continue
+            try:
                 print(f"\n{entry['title']}\n")
-                run(entry["url"], video_options(ask_quality(), False, None))
-            else:
-                print(f"\n{entry['title']}\n")
-                run(entry["url"], mp3_options(False, None))
-        except KeyboardInterrupt:
-            print("\nCancelled.")
-        except Exception as e:
-            print(f"\nError: {e}")
-        input("\nPress Enter to go back to the list...")
+                if action == "download":
+                    run(entry["url"], video_options(ask_quality(), False, None))
+                else:
+                    run(entry["url"], mp3_options(False, None))
+            except KeyboardInterrupt:
+                print("\nCancelled.")
+            except Exception as e:
+                print(f"\nError: {e}")
+            input("\nPress Enter to go back to the list...")
+    finally:
+        session.stop()   # don't leave music playing after you quit
+
+
+def play_first(query, quality, player, audio_only):
+    """One-liner mode: search, take the top result, play it right here (Ctrl+C to stop)."""
+    players = available_players(player)
+    name = pick_default_player(players, player)
+    exe = find_player(name) if name else None
+    if not exe:
+        sys.exit("No media player found. Install VLC or mpv, or use -P /path/to/player")
+    print(f'Searching "{query}"...')
+    try:
+        opts = {"quiet": True, "no_warnings": True, "extract_flat": True,
+                "skip_download": True, "logger": QuietLogger()}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch1:{query}", download=False)
+            entries = [e for e in ((info or {}).get("entries") or []) if e and e.get("id")]
+        if not entries:
+            sys.exit("No results.")
+        e = entries[0]
+        url = e.get("webpage_url") or e.get("url") or f"https://www.youtube.com/watch?v={e['id']}"
+        shown = CONTROL_RE.sub(" ", e.get("title") or e["id"])
+        print(f"Playing {'audio' if audio_only else 'video'} in {name}: {shown}")
+        print("(Ctrl+C to stop)\n")
+        dual = PLAYER_SPECS.get(name, {}).get("dual", False)
+        title, video_url, audio_url = resolve_stream(url, quality or DEFAULT_QUALITY, dual, audio_only)
+    except KeyboardInterrupt:
+        return 130
+    except Exception as ex:
+        sys.exit(f"snagit: {short_error(ex)}")
+    cmd = build_player_cmd(name, exe, title, video_url, audio_url, audio_only)
+    # mpv is happy in the terminal; GUI players would just spam it with log lines
+    quiet = {} if name == "mpv" else dict(stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        return subprocess.call(cmd, **quiet)
+    except KeyboardInterrupt:
+        return 0
 
 
 def search_main(args):
@@ -1143,7 +1220,9 @@ def search_main(args):
     query = " ".join(args.search).strip()
     if not query:
         sys.exit("snagit: the search text is empty")
-    return search_flow(query, args.quality, args.player, not args.no_thumbs)
+    if args.first:
+        return play_first(query, args.quality, args.player, args.audio)
+    return search_flow(query, args.quality, args.player, not args.no_thumbs, args.audio)
 
 
 def flow_search():
@@ -1235,7 +1314,9 @@ def build_parser():
                "  snagit URL -a -p               whole playlist as MP3\n"
                "  snagit URL -p -v               playlist with full yt-dlp output\n"
                "  snagit -s lofi hip hop         search YouTube, browse results, watch\n"
-               "  snagit -s lofi -P mpv -q 1080  same, using mpv at 1080p\n\n"
+               "  snagit -s lofi -P mpv -q 1080  same, using mpv at 1080p\n"
+               "  snagit -s song name -a -f      play the top result as audio only, no list\n"
+               "  snagit -s song name -a         browse results, Enter plays just the audio\n\n"
                f"made by Echo404 - Twitter: {TWITTER}\n",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -1245,7 +1326,8 @@ def build_parser():
     p.add_argument("-p", "--playlist", action="store_true",
                    help="treat the link as a playlist (default: single video)")
     p.add_argument("-a", "--audio", action="store_true",
-                   help="audio only, converted to MP3 (combine with -p for a playlist)")
+                   help="audio only, converted to MP3 (combine with -p for a playlist); "
+                        "with -s: play audio only, no video")
     p.add_argument("-r", "--range", type=range_arg, metavar="RANGE",
                    help='playlist items to get, e.g. 1-5,8,10-12 (default: all; needs -p)')
     p.add_argument("-o", "--output", metavar="DIR",
@@ -1254,6 +1336,8 @@ def build_parser():
                    help="show full yt-dlp output (default: clean progress only)")
     p.add_argument("-s", "--search", nargs="+", metavar="TEXT",
                    help="search YouTube and browse the results (Enter = watch, d = download)")
+    p.add_argument("-f", "--first", action="store_true",
+                   help="with -s: skip the list and play the top result right away")
     p.add_argument("-P", "--player", metavar="NAME",
                    help="player for search mode: vlc, mpv, iina, ffplay, or any command/path "
                         "(default: last one used, else the first one found)")
@@ -1294,7 +1378,10 @@ def cli_main(args):
 
 
 def main():
-    args = build_parser().parse_args()
+    parser = build_parser()
+    args = parser.parse_args()
+    if args.first and args.search is None:
+        parser.error("-f/--first needs -s/--search")
     if args.search is not None:
         sys.exit(search_main(args))
     if args.interactive or len(sys.argv) == 1:
