@@ -259,4 +259,4 @@ git pull
 cp snagit.py ~/.local/bin/snagit
 ```
 
-Twitter: @JeffreyPeter_
+Follow on Twitter: @JeffreyPeter_
