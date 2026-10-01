@@ -1,6 +1,6 @@
 # SnagIt
 
-A simple YouTube downloader by Echo404: playlist, single video, or MP3. It can search YouTube from the terminal, play videos in VLC or mpv, and run a local web interface you can also open from your phone.
+A simple YouTube downloader by Echo404: playlist, single video, or MP3. It can search YouTube from the terminal, play videos in VLC or mpv, and run a local web interface you can also open from your phone ;).
 
 Current version: **1.4.0**
 
