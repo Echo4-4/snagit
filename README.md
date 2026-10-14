@@ -252,7 +252,7 @@ Check that it works:
 snagit -h
 ```
 
-To update later, pull the latest changes and copy the file over again:
+To update later, pull the latest changes and copy the file over again: save
 
 ```
 git pull
