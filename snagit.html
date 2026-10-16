@@ -90,6 +90,9 @@ button.pri{background:var(--acc);border-color:var(--acc);color:var(--on);font-we
 .pl{display:flex;gap:.6rem;align-items:center;padding:.35rem .4rem;border-bottom:1px solid var(--line);user-select:none;cursor:pointer}.pl:hover{background:var(--sf)}
 .pl img{width:80px;height:45px;object-fit:cover;border-radius:4px;flex:none;background:var(--line)}.pl .n{width:2.6rem;text-align:right;color:var(--mut);flex:none;font-variant-numeric:tabular-nums}.pl .t{flex:1;min-width:0;overflow-wrap:anywhere}.pl .d{color:var(--mut);flex:none}
 .job{padding:.8rem;margin:.5rem 0;background:var(--sf);border:1px solid var(--line);border-radius:12px}
+.vnow{font-weight:600;margin:.55rem 0 0;overflow-wrap:anywhere}
+.vlog{margin-top:.5rem;max-height:13rem;overflow-y:auto;overscroll-behavior:contain;font:.78rem/1.5 var(--mono);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:.45rem .6rem;scrollbar-width:thin;scrollbar-color:var(--acc) transparent}
+.vlog .vt{overflow-wrap:anywhere}.vlog .vs{padding-left:1rem;color:var(--mut);overflow-wrap:anywhere}.vlog .ok{color:var(--ok)}.vlog .bad{color:var(--bad)}
 .bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:.4rem 0}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2))}
 .pill{font-size:.75rem;border:1px solid var(--line);border-radius:99px;padding:0 .5rem;margin:0 .4rem}
 .chk{display:flex;gap:.6rem;align-items:baseline;padding:.4rem 0;border-bottom:1px solid var(--line)}.chk b{min-width:5.5rem;font-family:var(--mono)}
@@ -385,20 +388,57 @@ function renderPlaylist(d) {
 }
 
 // ---------- queue page (live via server-sent events) ----------
+const JC = new Map();   // job id -> its card, updated in place so the video list keeps its scroll position
+function makeJobCard() {
+  const c = { id: 0, sig: "" };
+  c.title = h("strong"); c.pill = h("span", { class: "pill" });
+  c.rm = h("button", { class: "small", onclick: () => api("/api/cancel", { id: c.id }) }, "Remove");
+  c.count = h("span", { class: "muted small" });
+  c.now = h("div", { class: "vnow" });
+  c.fill = h("i"); c.bar = h("div", { class: "bar" }, c.fill);
+  c.meta = h("div", { class: "muted small" });
+  c.log = h("div", { class: "vlog" });
+  c.el = h("div", { class: "job" }, h("div", {}, c.title, c.pill, c.count, c.rm), c.now, c.bar, c.meta, c.log);
+  return c;
+}
+function updateJobCard(c, j) {
+  c.id = j.id;
+  const run = j.status === "running", vids = j.videos || [];
+  c.title.textContent = `#${j.id} ${j.label}`;
+  c.pill.textContent = j.status;
+  c.rm.hidden = j.status !== "queued";
+  c.count.textContent = [j.done ? `${j.done} saved` : "", j.failed ? `${j.failed} failed` : "", j.n > 1 ? `of ${j.n}` : ""].filter(Boolean).join(" · ");
+  // what is downloading right now: the video itself, not the playlist
+  c.now.hidden = !(run && j.title);
+  c.now.textContent = (j.idx && j.n ? `[${j.idx}/${j.n}] ` : "") + (j.title || "");
+  c.fill.style.width = (j.pct != null ? j.pct : j.status === "done" ? 100 : 0) + "%";
+  c.meta.textContent = run
+    ? [j.pct != null ? `${j.pct}%` : "", j.speed, j.eta ? `ETA ${j.eta}` : "", j.phase && j.phase !== "downloading" ? `(${j.phase})` : ""].filter(Boolean).join("  ")
+    : j.status === "done" ? (j.done ? `${j.done} saved` : "Finished") + (j.failed ? `, ${j.failed} failed` : "") + (j.note ? ". " + j.note : "")
+    : j.error || "";
+  // the CLI-style list: a line per video, then how it went
+  c.log.hidden = vids.length < 2;
+  const sig = vids.length + ":" + vids.map(v => v[2]).join("");
+  if (sig === c.sig) return;
+  c.sig = sig;
+  const stick = c.log.scrollTop + c.log.clientHeight >= c.log.scrollHeight - 24;
+  c.log.replaceChildren(...vids.map(([i, t, st, e]) => h("div", {},
+    h("div", { class: "vt" }, (i ? `[${i}${j.n ? "/" + j.n : ""}] ` : "") + t),
+    h("div", { class: "vs " + st }, st === "ok" ? "✓ Saved" : st === "bad" ? "✗ " + e : "…"))));
+  if (stick) c.log.scrollTop = c.log.scrollHeight;
+}
 function renderJobs() {
-  const jobs = S.jobs.slice().reverse(), active = S.jobs.filter(j => j.status === "queued" || j.status === "running").length;
+  const jobs = S.jobs.slice().reverse();
   setBadge();
   const box = $("#jobs");
-  if (!jobs.length) return box.replaceChildren(h("p", { class: "muted" }, "Nothing queued yet."));
-  box.replaceChildren(...jobs.map(j => {
-    const bar = h("i"); if (j.pct != null) bar.style.width = j.pct + "%"; else if (j.status === "done") bar.style.width = "100%";
-    const line = j.status === "running"
-      ? [j.idx && j.n ? `[${j.idx}/${j.n}] ` : "", j.title || "", j.pct != null ? `  ${j.pct}%` : "", j.speed ? `  ${j.speed}` : "", j.eta ? `  ETA ${j.eta}` : "", j.phase && j.phase !== "downloading" ? `  (${j.phase})` : ""].join("")
-      : j.status === "done" ? (j.done ? `${j.done} saved` : "Finished") + (j.note ? ". " + j.note : "") : j.error || "";
-    return h("div", { class: "job" }, h("div", {}, h("strong", {}, `#${j.id} ${j.label}`), h("span", { class: "pill" }, j.status === "running" ? "running" : j.status),
-      j.status === "queued" ? h("button", { class: "small", onclick: () => api("/api/cancel", { id: j.id }) }, "Remove") : null),
-      h("div", { class: "bar" }, bar), h("div", { class: "muted small" }, line));
-  }));
+  if (!jobs.length) { JC.clear(); return box.replaceChildren(h("p", { class: "muted" }, "Nothing queued yet.")); }
+  const keep = new Set(), els = jobs.map(j => {
+    keep.add(j.id);
+    let c = JC.get(j.id); if (!c) JC.set(j.id, c = makeJobCard());
+    updateJobCard(c, j); return c.el;
+  });
+  for (const id of [...JC.keys()]) if (!keep.has(id)) JC.delete(id);
+  if (box.children.length !== els.length || els.some((e, i) => box.children[i] !== e)) box.replaceChildren(...els);
 }
 function setBadge() {
   const n = S.jobs.filter(j => j.status === "queued" || j.status === "running").length + DQ.items.length, badge = $("#badge");

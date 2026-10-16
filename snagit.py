@@ -358,6 +358,9 @@ def base_options(playlist, items):
     }
     if playlist and items:
         opts["playlist_items"] = items
+    if playlist:
+        # a short random pause between videos keeps YouTube from flagging a long run as a bot
+        opts.update(sleep_interval=1, max_sleep_interval=4, sleep_interval_requests=0.5)
     # Tell yt-dlp which JS runtime to use (deno is on by default, node/bun are not)
     js_name, js_path = find_js_runtime()
     if js_name:
@@ -404,7 +407,10 @@ def fmt_eta(sec):
 class CleanUI:
     """Compact output: a header line per video, a live progress bar, then a result line."""
 
-    def __init__(self):
+    def __init__(self, tap=None):
+        self.tap = tap           # optional: the web page hears about each video through this
+        self.entries = {}        # video key -> {"idx", "title", "state", "msg"}
+        self.hints = []          # one-time tips collected from yt-dlp warnings
         try:
             "█░✓✗".encode(sys.stdout.encoding or "utf-8")
             self.full, self.empty, self.ok, self.bad = "█", "░", "✓", "✗"
@@ -430,6 +436,10 @@ class CleanUI:
         print(f"  {self.ok} Saved")
         self.done_count += 1
         self.state = "done"
+        if self.current in self.entries:
+            self.entries[self.current]["state"] = "done"
+        if self.tap:
+            self.tap("saved", None)
 
     def finish(self):
         """Closes the last video if nothing else did."""
@@ -445,15 +455,41 @@ class CleanUI:
         idx = info.get("playlist_index")
         total = info.get("n_entries") or info.get("playlist_count")
         prefix = f"[{idx}/{total}] " if idx and total else (f"[{idx}] " if idx else "")
-        print(f"{prefix}{info.get('title') or key}")
+        old = self.entries.get(key)
+        retry = bool(old and old["state"] == "failed")
+        if retry:
+            self.failed_count -= 1      # it gets another chance, so it is not a failure yet
+            old["state"] = None
+        else:
+            self.entries[key] = {"idx": idx, "title": info.get("title") or key, "state": None, "msg": ""}
+        print(f"{prefix}{info.get('title') or key}" + ("  (retrying)" if retry else ""))
+        if self.tap:
+            self.tap("begin", info)
 
     def error(self, msg):
         self._clear_bar()
         msg = re.sub(r"^ERROR:\s*", "", str(msg)).strip()
+        # "[youtube] abc123XYZ_-: Video unavailable" names a video that never started downloading
+        who = re.match(r"\[[\w:]+\] ([\w-]{11}):", msg)
+        if who and who.group(1) != self.current and who.group(1) not in self.entries:
+            self.begin({"id": who.group(1), "title": who.group(1)})
         print(f"  {self.bad} {msg}")
         if self.current is not None and self.state is None:
             self.state = "failed"
             self.failed_count += 1
+            if self.current in self.entries:
+                self.entries[self.current].update(state="failed", msg=msg)
+        if self.tap:
+            self.tap("error", msg)
+
+    def refused(self):
+        """Playlist positions of videos YouTube answered with HTTP 403 (worth another try)."""
+        return [e["idx"] for e in self.entries.values()
+                if e["state"] == "failed" and e["idx"] and "403" in e["msg"]]
+
+    def hint(self, text):
+        if text not in self.hints:
+            self.hints.append(text)
 
     # yt-dlp hooks
     def progress(self, d):
@@ -505,16 +541,38 @@ class CleanLogger:
 
     def debug(self, msg): pass
     def info(self, msg): pass
-    def warning(self, msg): pass
+
+    def warning(self, msg):
+        low = str(msg).lower()
+        if "js runtime" in low or "challenge" in low:
+            self.ui.hint("yt-dlp could not solve YouTube's JavaScript challenge. Install Deno (or Node.js 20+) "
+                         "and restart; this is a common cause of 403 errors.")
+        elif "po token" in low:
+            self.ui.hint("YouTube asked for a PO token for some formats. Updating yt-dlp usually fixes this.")
+
     def error(self, msg): self.ui.error(msg)
 
 
+RETRY_WAITS = (8, 20)   # seconds to wait before each extra try at videos YouTube refused with HTTP 403
+
+
+def retry_options(opts, attempt):
+    """Gentler settings for a second chance: one connection, small chunks, then IPv4 only."""
+    r = dict(opts)
+    r.update(concurrent_fragment_downloads=1, http_chunk_size=10 * 1024 * 1024,
+             retries=10, fragment_retries=10, sleep_interval=2, max_sleep_interval=6)
+    if attempt >= 2:
+        r["source_address"] = "0.0.0.0"   # some networks get a 403 over IPv6 but not IPv4
+    return r
+
+
 def run(url, opts, tap=None):
-    """tap(kind, d) is optional: the web page uses it to mirror progress (kind is "progress" or "post")."""
+    """tap(kind, d) is optional: the web page uses it to mirror what happens. kind is one of
+    "progress", "post" (yt-dlp hooks), "begin" (a video starts), "saved", "error" and "tick"."""
     print("Snagging... \n")
     ui = None
     if not VERBOSE:
-        ui = CleanUI()
+        ui = CleanUI(tap)
         opts.update(
             quiet=True, no_warnings=True, noprogress=True,
             logger=CleanLogger(ui),
@@ -524,21 +582,54 @@ def run(url, opts, tap=None):
     if tap:
         opts.setdefault("progress_hooks", []).append(lambda d: tap("progress", d))
         opts.setdefault("postprocessor_hooks", []).append(lambda d: tap("post", d))
+
+    def starting(info, *, incomplete=False):
+        # yt-dlp asks this right before it downloads each video, so we know which one is current
+        # even when it fails before the first byte (a 403 never reaches the progress hook)
+        if ui and not incomplete:
+            ui.begin(info)
+        return None
+    opts["match_filter"] = starting
+
     with yt_dlp.YoutubeDL(opts) as ydl:
         code = ydl.download([url])
 
-    if ui:
+    if not ui:
+        if code:
+            print("\nSomething failed, check the messages above. Nothing (or not everything) was saved.")
+        else:
+            print(f"\nDone! Files saved in {OUTPUT_DIR}")
+        return code
+
+    ui.finish()
+    for attempt, wait in enumerate(RETRY_WAITS, 1):
+        todo = ui.refused()
+        if not todo:
+            break
+        print(f"\nYouTube refused {len(todo)} video(s). Trying again in {wait}s "
+              f"(attempt {attempt}/{len(RETRY_WAITS)}) with gentler settings...\n")
+        for _ in range(wait):
+            time.sleep(1)
+            if tap:
+                tap("tick", None)      # lets the web page cancel while we wait
+        ropts = retry_options(opts, attempt)
+        if any(e["idx"] for e in ui.entries.values()):
+            ropts["playlist_items"] = ",".join(str(i) for i in todo)
+        with yt_dlp.YoutubeDL(ropts) as ydl:
+            ydl.download([url])
         ui.finish()
-        summary = f"{ui.done_count} saved"
-        if ui.failed_count:
-            summary += f", {ui.failed_count} failed"
-        print(f"\nDone! {summary}. Files in {OUTPUT_DIR}")
-        return 1 if ui.failed_count else code
-    if code:
-        print("\nSomething failed, check the messages above. Nothing (or not everything) was saved.")
-    else:
-        print(f"\nDone! Files saved in {OUTPUT_DIR}")
-    return code
+
+    if ui.refused():
+        ui.hint("YouTube keeps refusing some videos (HTTP 403). Update yt-dlp, since it changes often "
+                "(pip install -U \"yt-dlp[default]\"), then run the failed ones again. "
+                "If it still happens, wait a while: YouTube limits how much one connection can fetch in a row.")
+    summary = f"{ui.done_count} saved"
+    if ui.failed_count:
+        summary += f", {ui.failed_count} failed"
+    print(f"\nDone! {summary}. Files in {OUTPUT_DIR}")
+    for tip in ui.hints:
+        print(f"\nTip: {tip}")
+    return 1 if ui.failed_count else code
 
 
 # ---------- search & watch (browse YouTube results in the terminal) ----------
@@ -1657,9 +1748,14 @@ class Job:
         self.title, self.idx, self.n = "", None, total
         self.pct, self.speed, self.eta, self.phase = None, "", "", ""
         self.done, self.error, self.note = 0, "", ""
+        self.videos, self.vmap, self.cur, self.failed = [], {}, None, 0   # one row per video, like the CLI
 
     def public(self):
-        return {"id": self.id, "kind": self.kind, "label": self.label, "quality": self.quality,
+        # while running, send every row; afterwards only the failures when the list is long
+        rows = self.videos if self.status == "running" or len(self.videos) <= 100 else \
+            [v for v in self.videos if v["s"] == "bad"]
+        return {"videos": [[v["i"], v["t"], v["s"], v["e"]] for v in rows], "failed": self.failed,
+                "id": self.id, "kind": self.kind, "label": self.label, "quality": self.quality,
                 "status": self.status, "title": self.title, "idx": self.idx, "n": self.n, "pct": self.pct,
                 "speed": self.speed, "eta": self.eta, "phase": self.phase, "done": self.done,
                 "error": self.error, "note": self.note}
@@ -1784,22 +1880,65 @@ class WebApp:
         return run(job.url, opts, tap=self.make_tap(job))
 
     def make_tap(self, job):
-        """Progress hooks that mirror yt-dlp's progress on the web page (and honor Ctrl+C cancel)."""
+        """Mirrors what the terminal shows onto the web page (and honors Ctrl+C / cancel)."""
+        def row(state=None, msg=""):
+            v = job.vmap.get(job.cur)
+            if v is not None:
+                if state:
+                    v["s"], v["e"] = state, msg[:200]
+            return v
+
         def tap(kind, d):
             if job.cancel:
                 raise KeyboardInterrupt
+            if kind == "begin":
+                key = d.get("id") or d.get("title")
+                with self.lock:
+                    job.cur = key
+                    v = job.vmap.get(key)
+                    if v is None:
+                        v = {"i": d.get("playlist_index"), "t": str(d.get("title") or key)[:120], "s": "run", "e": ""}
+                        job.vmap[key] = v
+                        job.videos.append(v)
+                    else:
+                        if v["s"] == "bad":
+                            job.failed -= 1
+                        v["s"], v["e"] = "run", ""
+                    job.title, job.idx = v["t"], v["i"] or job.idx
+                    job.n = d.get("n_entries") or d.get("playlist_count") or job.total or job.n
+                    job.pct, job.speed, job.eta, job.phase = 0, "", "", "starting"
+                self.touch()
+                return
+            if kind == "saved":
+                with self.lock:
+                    job.done += 1
+                    row("ok")
+                    job.pct, job.phase = 100, "saved"
+                self.touch()
+                return
+            if kind == "error":
+                with self.lock:
+                    v = job.vmap.get(job.cur)
+                    if v is not None and v["s"] != "bad":
+                        job.failed += 1
+                    row("bad", d)
+                    job.pct, job.phase = None, "failed"
+                self.touch()
+                return
             if kind == "post":
                 if d.get("postprocessor") == "MoveFiles" and d.get("status") == "finished":
-                    job.done, job.pct, job.phase = job.done + 1, 100, "saved"
-                    self.touch()
+                    if VERBOSE:   # without the clean output there are no "saved" events
+                        job.done, job.pct, job.phase = job.done + 1, 100, "saved"
+                        self.touch()
                 elif d.get("status") == "started":
                     job.phase = "converting"
                     self.touch(soon=True)
                 return
-            if d.get("status") not in ("downloading", "finished"):
+            if kind != "progress" or d.get("status") not in ("downloading", "finished"):
                 return
             info = d.get("info_dict") or {}
-            job.title = info.get("title") or job.title
+            if not job.title:
+                job.title = info.get("title") or job.title
             job.idx = info.get("playlist_index") or job.idx
             job.n = info.get("n_entries") or info.get("playlist_count") or job.total or job.n
             if d["status"] == "finished":
