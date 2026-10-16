@@ -56,6 +56,8 @@ import unicodedata
 import urllib.parse
 import urllib.request
 import webbrowser
+import base64
+import hashlib
 
 if os.name == "nt":
     import msvcrt
@@ -78,7 +80,7 @@ except ImportError:
     yt_dlp = None
     HAS_YTDLP = False
 
-VERSION = "1.4.0"
+VERSION = "1.5.0"
 TWITTER = "@JeffreyPeter_"
 QUALITIES = ("360", "480", "720", "1080")
 DEFAULT_QUALITY = "720"
@@ -1342,12 +1344,48 @@ MEDIA_EXTS = AUDIO_EXTS + VIDEO_EXTS
 PARTIAL_RE = re.compile(r"\.f\d+\.\w+$|\.temp\.\w+$", re.I)   # yt-dlp's unfinished pieces
 EXTRA_MIME = {".m4a": "audio/mp4", ".opus": "audio/ogg", ".mp3": "audio/mpeg", ".aac": "audio/aac",
               ".mkv": "video/x-matroska", ".webm": "video/webm", ".flac": "audio/flac"}
-WEB_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; "
-           "img-src 'self' https://i.ytimg.com data:; media-src 'self' https: blob:; "
-           "connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'")
+WEB_FILE = "snagit.html"   # the web interface lives in its own file
+INDEX_HTML = b""            # filled in by load_web_page()
+WEB_CSP = ""
 QUIET_PATHS = ("/api/events", "/api/state")   # requests that don't count as "activity" for --lan-timeout
 
 APP = None   # the WebApp instance, set by web_main()
+
+
+# --- the web page (snagit.html): found, loaded, and locked down with a CSP built from its own hashes ---
+
+def web_file_candidates():
+    """Where to look for snagit.html: next to snagit.py first, then the per-user data folder."""
+    here = os.path.dirname(os.path.realpath(__file__))
+    if OS == "Windows":
+        data = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "snagit")
+    else:
+        data = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.join(os.path.expanduser("~"), ".local", "share"), "snagit")
+    return [os.path.join(here, WEB_FILE), os.path.join(data, WEB_FILE)]
+
+
+def build_csp(page):
+    def hashes(tag):
+        found = re.findall(r"<%s[^>]*>(.*?)</%s>" % (tag, tag), page, re.S)
+        return " ".join("'sha256-%s'" % base64.b64encode(hashlib.sha256(t.encode("utf-8")).digest()).decode()
+                        for t in found) or "'none'"
+    return ("default-src 'none'; script-src %s; style-src %s; img-src 'self' https://i.ytimg.com data:; "
+            "media-src 'self' https: blob:; connect-src 'self'; base-uri 'none'; form-action 'self'; "
+            "frame-ancestors 'none'" % (hashes("script"), hashes("style")))
+
+
+def load_web_page():
+    global INDEX_HTML, WEB_CSP
+    for path in web_file_candidates():
+        try:
+            with open(path, "rb") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        INDEX_HTML, WEB_CSP = raw, build_csp(raw.decode("utf-8"))
+        return path
+    return None
+
 
 
 class ApiError(Exception):
@@ -1991,11 +2029,7 @@ class WebHandler(http.server.BaseHTTPRequestHandler):
         app = APP
         ip = self.client_address[0]
         if method == "GET" and path in ("/", "/check"):
-            return self._send(200, PAIR_HTML.encode(), "text/html; charset=utf-8")
-        if method == "GET" and path == "/app.css":
-            return self._send(200, APP_CSS.encode(), "text/css; charset=utf-8")
-        if method == "GET" and path == "/pair.js":
-            return self._send(200, PAIR_JS.encode(), "application/javascript; charset=utf-8")
+            return self._send(200, INDEX_HTML, "text/html; charset=utf-8")   # the page shows its own PIN screen
         if method == "POST" and path == "/pair":
             data = self._body()
             ok, msg, wait = app.try_pin(ip, data.get("pin", ""))
@@ -2017,11 +2051,7 @@ class WebHandler(http.server.BaseHTTPRequestHandler):
         arg = lambda name, default="": (qs.get(name) or [default])[0]
         if method in ("GET", "HEAD"):
             if path in ("/", "/check"):
-                return self._send(200, INDEX_HTML.encode(), "text/html; charset=utf-8")
-            if path == "/app.js":
-                return self._send(200, APP_JS.encode(), "application/javascript; charset=utf-8")
-            if path == "/app.css":
-                return self._send(200, APP_CSS.encode(), "text/css; charset=utf-8")
+                return self._send(200, INDEX_HTML, "text/html; charset=utf-8")
             if path.startswith("/files/"):
                 return self._file(path[len("/files/"):], arg("dl") == "1")
             if path == "/api/events":
@@ -2282,6 +2312,9 @@ def web_main(args):
     VERBOSE = args.verbose
     if args.output:
         OUTPUT_DIR = os.path.abspath(os.path.expanduser(args.output))
+    if not load_web_page():
+        sys.exit(f"snagit: can't find {WEB_FILE} (the web interface). Put it next to snagit.py or in "
+                 + os.path.dirname(web_file_candidates()[1]))
     if not HAS_YTDLP and not args.check:
         sys.exit("yt-dlp is required. Install it: pip install -U \"yt-dlp[default]\"  "
                  "(or run snagit --web --check to install it from the browser)")
@@ -2332,490 +2365,6 @@ def web_main(args):
     httpd.shutdown()
     httpd.server_close()
     return 0
-
-
-# ---------- web front end (plain HTML/CSS/JS, served from memory: no build step, no CDN) ----------
-
-INDEX_HTML = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>SnagIt</title><link rel="stylesheet" href="/app.css"></head>
-<body>
-<header>
-  <h1>SnagIt</h1>
-  <nav id="nav">
-    <button data-view="home" class="on">Home</button>
-    <button data-view="queue">Queue <span id="badge" class="badge" hidden></span></button>
-    <button data-view="dl">Downloads</button>
-    <button data-view="check">Requirements</button>
-    <button data-view="set">Settings</button>
-  </nav>
-</header>
-<main>
-<section id="v-home">
-  <div class="box">
-    <input id="box" type="text" autocomplete="off" spellcheck="false" autofocus
-           placeholder="Paste a YouTube link, a playlist link, or type what to search for">
-    <button id="paste" title="Paste from clipboard">Paste</button>
-    <button id="go" class="pri">Go</button>
-  </div>
-  <p class="muted small">Playlist link gives a checklist. Video link gives one card. Anything else is a YouTube search.
-    You can also press Ctrl+V anywhere or drop a link on this page.</p>
-  <div class="row small"><label>Quality for Download buttons
-    <select id="q"></select></label></div>
-  <div id="out"></div>
-</section>
-<section id="v-queue" hidden><h2>Download queue</h2>
-  <p class="muted small">One download runs at a time, in the terminal where <code>snagit --web</code> is running.
-    Closing this tab does not stop anything. Ctrl+C in the terminal cancels the current job.</p>
-  <div id="jobs"></div></section>
-<section id="v-dl" hidden><h2>Downloads</h2>
-  <div class="row"><input id="filter" type="search" placeholder="Filter files">
-    <button id="playall">Play all audio</button><button id="refresh">Refresh</button></div>
-  <p class="muted small" id="dlnote"></p><div id="files"></div></section>
-<section id="v-check" hidden><h2>Requirements</h2>
-  <div id="checks"><p class="muted">Checking...</p></div>
-  <div class="row"><button id="recheck">Check again</button>
-    <button id="upd">Update yt-dlp</button><button id="deno">Install Deno</button>
-    <button id="test" class="pri">Test</button></div>
-  <p id="testout" class="small"></p><div id="lanbox"></div></section>
-<section id="v-set" hidden><h2>Settings</h2>
-  <fieldset><legend>Watch and Audio buttons play in</legend>
-    <label><input type="radio" name="watch" value="browser"> This page (browser)</label>
-    <label><input type="radio" name="watch" value="desktop"> A desktop player on the computer (VLC / mpv)</label>
-    <label>Desktop player <select id="player"></select></label>
-    <p class="muted small" id="setnote"></p></fieldset>
-  <p class="muted small" id="about"></p></section>
-</main>
-<div id="dock" hidden>
-  <video id="vid" controls playsinline hidden></video>
-  <div class="dockbar"><div class="now" id="now">Nothing playing</div>
-    <audio id="aud" controls></audio>
-    <button id="skip">Skip</button><button id="stop">Stop</button></div>
-  <details id="qwrap"><summary id="qsum">Next up (0)</summary><div id="qlist"></div>
-    <button id="qclear" class="small">Clear list</button></details>
-</div>
-<div id="toast" role="status"></div>
-<script src="/app.js" defer></script>
-</body></html>
-"""
-
-PAIR_HTML = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="color-scheme" content="light dark">
-<title>SnagIt - connect</title><link rel="stylesheet" href="/app.css"></head>
-<body><main class="pair"><h1>SnagIt</h1>
-<p>Enter the 6-digit PIN shown in the terminal on the computer. Then approve this device there.</p>
-<div class="box"><input id="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456">
-<button id="go" class="pri">Connect</button></div>
-<p id="msg" class="small"></p></main>
-<script src="/pair.js" defer></script></body></html>
-"""
-
-PAIR_JS = r"""
-"use strict";
-const pin = document.getElementById("pin"), msg = document.getElementById("msg"), go = document.getElementById("go");
-async function poll(id) {
-  for (;;) {
-    await new Promise(r => setTimeout(r, 1500));
-    let d = {};
-    try { d = await (await fetch("/pair/status?id=" + encodeURIComponent(id))).json(); } catch (e) { continue; }
-    if (d.state === "allowed") { location.reload(); return; }
-    if (d.state === "denied") { msg.textContent = "The computer said no, or nobody answered in time."; go.disabled = false; return; }
-  }
-}
-go.addEventListener("click", async () => {
-  go.disabled = true; msg.textContent = "";
-  try {
-    const r = await fetch("/pair", { method: "POST", headers: { "Content-Type": "application/json" },
-                                    body: JSON.stringify({ pin: pin.value.trim() }) });
-    const d = await r.json();
-    if (!r.ok) { msg.textContent = d.error || "Failed."; go.disabled = false; return; }
-    msg.textContent = "Waiting for approval on the computer...";
-    poll(d.pending);
-  } catch (e) { msg.textContent = "Can't reach the computer."; go.disabled = false; }
-});
-pin.addEventListener("keydown", e => { if (e.key === "Enter") go.click(); });
-"""
-
-APP_CSS = r"""
-:root{--bg:#fff;--fg:#1b1b21;--mut:#6a6a76;--card:#f3f3f7;--line:#d9d9e1;--acc:#0b8fb3;--acc2:#c22a9c;--ok:#188a45;--bad:#c93636;color-scheme:light dark}
-@media (prefers-color-scheme:dark){:root{--bg:#141418;--fg:#ececf1;--mut:#9a9aa8;--card:#1f1f26;--line:#34343e;--acc:#35c7ea;--acc2:#ff4fd0;--ok:#43c777;--bad:#ff6b6b}}
-*{box-sizing:border-box}[hidden]{display:none!important}
-body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding-bottom:5.5rem}
-header{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem 1.2rem;padding:.7rem 1rem;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:5}
-h1{margin:0;font-size:1.4rem;background:linear-gradient(90deg,var(--acc),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
-h2{margin:.2rem 0 .6rem}h3{margin:0;font-size:1rem;overflow-wrap:anywhere}
-nav{display:flex;flex-wrap:wrap;gap:.3rem}
-main{max-width:980px;margin:0 auto;padding:1rem}
-button,select,input[type=text],input[type=search],input:not([type]){font:inherit;color:inherit;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:.45rem .75rem}
-button{cursor:pointer}button:hover{border-color:var(--acc)}button:disabled{opacity:.5;cursor:default}
-button.on{border-color:var(--acc);color:var(--acc)}button.pri{background:var(--acc);border-color:var(--acc);color:#04222b;font-weight:600}
-code{background:var(--card);padding:.1rem .3rem;border-radius:4px}
-.box{display:flex;gap:.5rem}.box input{flex:1;min-width:0}
-.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0}
-.muted{color:var(--mut)}.small{font-size:.85rem}.err{color:var(--bad)}.ok{color:var(--ok)}
-.badge{background:var(--acc2);color:#fff;border-radius:99px;padding:0 .45rem;font-size:.75rem}
-.card{display:flex;gap:.8rem;padding:.6rem;margin:.6rem 0;background:var(--card);border-radius:10px}
-.card img{width:168px;height:94px;object-fit:cover;border-radius:6px;flex:none;background:var(--line)}
-.info{min-width:0;flex:1}.btns{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:.5rem}.btns button{padding:.3rem .6rem}
-.tools{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.6rem 0;position:sticky;top:3.4rem;background:var(--bg);padding:.4rem 0;z-index:4}
-.tools .grow{flex:1;min-width:8rem}
-.pl{display:flex;gap:.6rem;align-items:center;padding:.35rem .4rem;border-bottom:1px solid var(--line);user-select:none;cursor:pointer}
-.pl:hover{background:var(--card)}.pl img{width:80px;height:45px;object-fit:cover;border-radius:4px;flex:none;background:var(--line)}
-.pl .n{width:2.6rem;text-align:right;color:var(--mut);flex:none;font-variant-numeric:tabular-nums}
-.pl .t{flex:1;min-width:0;overflow-wrap:anywhere}.pl .d{color:var(--mut);flex:none}
-.job{padding:.6rem;margin:.5rem 0;background:var(--card);border-radius:10px}
-.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:.4rem 0}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2))}
-.pill{font-size:.75rem;border:1px solid var(--line);border-radius:99px;padding:0 .5rem;margin-left:.4rem}
-.chk{display:flex;gap:.6rem;align-items:baseline;padding:.3rem 0;border-bottom:1px solid var(--line)}
-.chk b{min-width:5.5rem;font-family:ui-monospace,monospace}.file{display:flex;flex-wrap:wrap;gap:.4rem .8rem;align-items:center;padding:.4rem 0;border-bottom:1px solid var(--line)}
-.file .nm{flex:1;min-width:12rem;overflow-wrap:anywhere}.file a,.file button{font-size:.85rem}
-a{color:var(--acc)}
-fieldset{border:1px solid var(--line);border-radius:10px;display:grid;gap:.5rem}
-#dock{position:fixed;left:0;right:0;bottom:0;background:var(--card);border-top:1px solid var(--line);padding:.5rem .8rem;z-index:9}
-#vid{width:100%;max-height:45vh;background:#000;border-radius:8px}
-.dockbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}.now{flex:1 1 12rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}
-#aud{flex:2 1 14rem;height:36px;min-width:0}
-#qlist .qi{display:flex;gap:.4rem;align-items:center;padding:.2rem 0}#qlist .qi span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-#toast{position:fixed;left:50%;bottom:6rem;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:.5rem 1rem;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;z-index:20}
-#toast.show{opacity:1}#toast.bad{background:var(--bad);color:#fff}
-.pair{max-width:26rem;margin:15vh auto 0}.pair input{font-size:1.4rem;letter-spacing:.3rem;text-align:center}
-@media (max-width:600px){.card{flex-direction:column}.card img{width:100%;height:auto;aspect-ratio:16/9}main{padding:.7rem}}
-"""
-
-APP_JS = r"""
-"use strict";
-const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
-function h(tag, a, ...kids) {
-  const e = document.createElement(tag);
-  for (const k in a || {}) {
-    const v = a[k];
-    if (k === "class") e.className = v;
-    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
-    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
-  }
-  for (const c of kids.flat()) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(c)); }
-  return e;
-}
-const S = { cfg: { watch: "browser", player: "", players: [] }, local: true, quals: [], dq: "720", jobs: [], files: [], lan: {} };
-let toastT;
-function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.className = "show" + (bad ? " bad" : ""); clearTimeout(toastT); toastT = setTimeout(() => t.className = "", 3800); }
-async function api(path, body) {
-  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
-  const r = await fetch(path, opt);
-  let d = {}; try { d = await r.json(); } catch (e) {}
-  if (!r.ok || d.error) throw new Error(d.error || ("HTTP " + r.status));
-  return d;
-}
-const pad = n => String(n).padStart(2, "0");
-const fmtDur = s => { if (!s) return "--:--"; s = Math.floor(s); const H = Math.floor(s / 3600), M = Math.floor(s % 3600 / 60), X = s % 60; return H ? `${H}:${pad(M)}:${pad(X)}` : `${M}:${pad(X)}`; };
-const fmtViews = n => { if (n == null) return ""; for (const [d, x] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]]) if (n >= d) return (n / d).toFixed(1).replace(".0", "") + x + " views"; return n + " views"; };
-const fmtSize = n => { for (const u of ["B", "KB", "MB", "GB"]) { if (n < 1024 || u === "GB") return (u === "B" ? n : n.toFixed(1)) + " " + u; n /= 1024; } };
-const thumb = id => "https://i.ytimg.com/vi/" + encodeURIComponent(id) + "/mqdefault.jpg";
-const encPath = p => p.split("/").map(encodeURIComponent).join("/");
-
-// ---------- views ----------
-function show(v) {
-  for (const s of $$("main > section")) s.hidden = s.id !== "v-" + v;
-  for (const b of $$("#nav button")) b.classList.toggle("on", b.dataset.view === v);
-  try { history.replaceState(null, "", v === "check" ? "/check" : "/"); } catch (e) {}
-  if (v === "dl") loadFiles();
-  if (v === "check") loadCheck();
-  if (v === "set") renderSettings();
-}
-for (const b of $$("#nav button")) b.addEventListener("click", () => show(b.dataset.view));
-
-// ---------- the one box ----------
-let seq = 0;
-async function go(text) {
-  text = (text || "").trim(); if (!text) return;
-  $("#box").value = text; show("home");
-  const out = $("#out"), my = ++seq;
-  out.replaceChildren(h("p", { class: "muted" }, "Looking..."));
-  try {
-    const d = await api("/api/lookup?q=" + encodeURIComponent(text));
-    if (my !== seq) return;
-    if (d.kind === "search") renderSearch(d);
-    else if (d.kind === "playlist") renderPlaylist(d);
-    else out.replaceChildren(card(d.item));
-  } catch (e) { if (my === seq) out.replaceChildren(h("p", { class: "err" }, e.message)); }
-}
-$("#go").addEventListener("click", () => go($("#box").value));
-$("#box").addEventListener("keydown", e => { if (e.key === "Enter") go(e.target.value); });
-$("#box").addEventListener("paste", () => setTimeout(() => { if (/^https?:\/\//i.test($("#box").value.trim())) go($("#box").value); }, 0));
-$("#paste").addEventListener("click", async () => {
-  try { const t = await navigator.clipboard.readText(); t ? go(t) : toast("The clipboard is empty."); }
-  catch (e) { $("#box").focus(); toast("Can't read the clipboard here. Paste into the box instead (long-press on a phone).", true); }
-});
-document.addEventListener("paste", e => {
-  const t = e.target; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-  const txt = e.clipboardData && e.clipboardData.getData("text"); if (txt) { e.preventDefault(); go(txt); }
-});
-document.addEventListener("dragover", e => e.preventDefault());
-document.addEventListener("drop", e => {
-  e.preventDefault(); const dt = e.dataTransfer; if (!dt) return;
-  const raw = dt.getData("text/uri-list") || dt.getData("text/plain") || "";
-  const line = raw.split(/\r?\n/).find(l => l.trim() && !l.startsWith("#")); if (line) go(line);
-});
-
-// ---------- cards ----------
-async function queueDownload(body, label) {
-  try { const d = await api("/api/download", body); toast(`Queued as job #${d.id}${label ? ": " + label : ""}. It runs in the terminal.`); }
-  catch (e) { toast(e.message, true); }
-}
-const dlVideo = (it, q) => queueDownload({ kind: "video", url: it.url, quality: q, title: it.title }, it.title);
-function card(it) {
-  const meta = [it.channel, it.live ? "LIVE" : fmtDur(it.duration), fmtViews(it.views)].filter(Boolean).join(" | ");
-  const b = (t, f, title) => h("button", { onclick: f, title }, t);
-  return h("article", { class: "card" },
-    h("img", { src: thumb(it.id), alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: e => e.target.style.visibility = "hidden" }),
-    h("div", { class: "info" }, h("h3", {}, it.title), h("div", { class: "muted small" }, meta),
-      h("div", { class: "btns" },
-        b("Watch", () => play(it, false)), b("Audio", () => play(it, true)),
-        b("Download", () => dlVideo(it, $("#q").value)), b("MP3", () => dlVideo(it, "mp3")),
-        b("+ Queue", () => addQ(trackOf(it), false), "Add to the Next up list"),
-        b("Next", () => addQ(trackOf(it), true), "Play next"))));
-}
-function renderSearch(d) {
-  const out = $("#out"), list = h("div"), more = h("button", {}, "Load more");
-  let offset = 0;
-  const add = r => { offset += r.items.length; r.items.forEach(it => list.append(card(it))); more.hidden = !r.more || !r.items.length;
-    if (!offset) list.append(h("p", { class: "muted" }, "No results.")); };
-  more.addEventListener("click", async () => {
-    more.disabled = true;
-    try { add(await api(`/api/search?q=${encodeURIComponent(d.query)}&offset=${offset}`)); } catch (e) { toast(e.message, true); }
-    more.disabled = false;
-  });
-  out.replaceChildren(h("p", { class: "muted small" }, `Results for "${d.query}"`), list, more); add(d);
-}
-
-// ---------- playlist ----------
-function parseRange(t, total) {
-  t = t.replace(/\s+/g, "");
-  if (!/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(t)) return null;
-  const out = new Set();
-  for (const p of t.split(",")) {
-    let a, b;
-    if (p.includes("-")) { [a, b] = p.split("-").map(Number); } else { a = b = Number(p); }
-    if (a < 1 || b < a || b - a > 100000) return null;
-    for (let k = a, hi = total ? Math.min(b, total) : b; k <= hi; k++) out.add(k);
-  }
-  return out;
-}
-function renderPlaylist(d) {
-  const pl = { url: d.url, total: d.count || null, sel: new Set(), last: null, all: false, more: d.has_more, next: 1 };
-  const list = h("div"), moreBtn = h("button", {}, "Load more");
-  const qsel = h("select", {}, ...[...S.quals, "mp3"].map(q => h("option", { value: q }, q === "mp3" ? "MP3 (audio)" : q + "p")));
-  qsel.value = $("#q").value;
-  const cnt = h("strong", {}, "0 selected"), rng = h("input", { type: "text", class: "grow", placeholder: "Range, e.g. 1-5,8,10-12" });
-  const boxes = new Map();
-  const upd = () => { cnt.textContent = pl.all && !pl.total && pl.more ? "All selected" : pl.sel.size + " selected"; };
-  const sync = () => { for (const [i, cb] of boxes) cb.checked = pl.sel.has(i); upd(); };
-  const rows = items => items.forEach(it => {
-    const cb = h("input", { type: "checkbox" }); cb.checked = pl.sel.has(it.index); boxes.set(it.index, cb);
-    cb.addEventListener("click", ev => {
-      pl.all = false;
-      if (ev.shiftKey && pl.last != null) { const a = Math.min(pl.last, it.index), z = Math.max(pl.last, it.index);
-        for (let k = a; k <= z; k++) cb.checked ? pl.sel.add(k) : pl.sel.delete(k); sync(); }
-      else cb.checked ? pl.sel.add(it.index) : pl.sel.delete(it.index);
-      pl.last = it.index; upd();
-    });
-    list.append(h("label", { class: "pl" }, cb, h("span", { class: "n" }, it.index),
-      h("img", { src: thumb(it.id), alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: e => e.target.style.visibility = "hidden" }),
-      h("span", { class: "t" }, it.title), h("span", { class: "d" }, fmtDur(it.duration))));
-    pl.next = it.index + 1;
-  });
-  const selectAll = () => {
-    pl.sel = new Set(); pl.all = true;
-    if (pl.total) for (let k = 1; k <= pl.total; k++) pl.sel.add(k); else for (const i of boxes.keys()) pl.sel.add(i);
-    sync();
-  };
-  const load = r => { rows(r.items); pl.more = r.has_more; if (r.count) pl.total = r.count; moreBtn.hidden = !pl.more;
-    if (pl.all && !pl.total) for (const i of boxes.keys()) pl.sel.add(i); sync(); };
-  moreBtn.addEventListener("click", async () => {
-    moreBtn.disabled = true;
-    try { load(await api(`/api/playlist?url=${encodeURIComponent(pl.url)}&start=${pl.next}`)); } catch (e) { toast(e.message, true); }
-    moreBtn.disabled = false;
-  });
-  const apply = () => { const s = parseRange(rng.value, pl.total); if (!s) { toast("Use a range like 1-5,8,10-12", true); return; }
-    pl.sel = s; pl.all = false; sync(); };
-  rng.addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
-  const dlBtn = h("button", { class: "pri", onclick: () => {
-    if (!pl.sel.size && !pl.all) return toast("Tick at least one video first.", true);
-    const body = { kind: "playlist", url: pl.url, quality: qsel.value, title: d.title };
-    if (pl.all && !pl.total && pl.more) body.all = true; else body.indices = [...pl.sel];
-    queueDownload(body, d.title);
-  } }, "Download");
-  $("#out").replaceChildren(
-    h("h2", {}, d.title), h("p", { class: "muted small" }, (pl.total ? pl.total + " videos" : "Playlist") + ". Shift-click selects a range."),
-    h("div", { class: "tools" }, qsel, h("button", { onclick: selectAll }, "Select all"),
-      h("button", { onclick: () => { pl.sel = new Set(); pl.all = false; sync(); } }, "Select none"),
-      rng, h("button", { onclick: apply }, "Tick range"), cnt, dlBtn),
-    list, moreBtn);
-  rows(d.items); moreBtn.hidden = !pl.more; upd();
-}
-
-// ---------- queue page (live via server-sent events) ----------
-function renderJobs() {
-  const jobs = S.jobs.slice().reverse(), active = S.jobs.filter(j => j.status === "queued" || j.status === "running").length;
-  const badge = $("#badge"); badge.hidden = !active; badge.textContent = active;
-  const box = $("#jobs");
-  if (!jobs.length) return box.replaceChildren(h("p", { class: "muted" }, "Nothing queued yet."));
-  box.replaceChildren(...jobs.map(j => {
-    const bar = h("i"); if (j.pct != null) bar.style.width = j.pct + "%"; else if (j.status === "done") bar.style.width = "100%";
-    const line = j.status === "running"
-      ? [j.idx && j.n ? `[${j.idx}/${j.n}] ` : "", j.title || "", j.pct != null ? `  ${j.pct}%` : "", j.speed ? `  ${j.speed}` : "", j.eta ? `  ETA ${j.eta}` : "", j.phase && j.phase !== "downloading" ? `  (${j.phase})` : ""].join("")
-      : j.status === "done" ? (j.done ? `${j.done} saved` : "Finished") + (j.note ? ". " + j.note : "") : j.error || "";
-    return h("div", { class: "job" }, h("div", {}, h("strong", {}, `#${j.id} ${j.label}`), h("span", { class: "pill" }, j.status === "running" ? "running" : j.status),
-      j.status === "queued" ? h("button", { class: "small", onclick: () => api("/api/cancel", { id: j.id }) }, "Remove") : null),
-      h("div", { class: "bar" }, bar), h("div", { class: "muted small" }, line));
-  }));
-}
-let prevStatus = {};
-function onJobs(jobs) {
-  for (const j of jobs) { const p = prevStatus[j.id];
-    if (p && p !== j.status && j.status === "done") toast(`Finished: ${j.label}`);
-    if (p && p !== j.status && j.status === "failed") toast(`Failed: ${j.label}`, true);
-    prevStatus[j.id] = j.status; }
-  S.jobs = jobs; renderJobs();
-}
-function listen() {
-  const es = new EventSource("/api/events");
-  es.onmessage = e => { const d = JSON.parse(e.data); onJobs(d.jobs); };
-  es.onerror = () => { if (es.readyState === 2) setTimeout(listen, 5000); };
-}
-
-// ---------- player dock + "next up" list ----------
-const P = { q: [], now: null };
-try { P.q = JSON.parse(localStorage.getItem("snagit_q") || "[]").filter(t => t && t.title); } catch (e) {}
-const trackOf = (it, audio = true) => ({ title: it.title, url: it.url, audio });
-function saveQ() { try { localStorage.setItem("snagit_q", JSON.stringify(P.q)); } catch (e) {} }
-function renderDock() {
-  const has = P.now || P.q.length; $("#dock").hidden = !has;
-  $("#now").textContent = P.now ? P.now.title : "Nothing playing";
-  $("#qsum").textContent = `Next up (${P.q.length})`;
-  $("#qlist").replaceChildren(...P.q.map((t, i) => h("div", { class: "qi" }, h("span", {}, `${i + 1}. ${t.title}`),
-    h("button", { onclick: () => { P.q.splice(i, 1); saveQ(); renderDock(); start(t); } }, "Play"),
-    h("button", { onclick: () => { P.q.splice(i, 1); saveQ(); renderDock(); } }, "x"))));
-  $("#qclear").hidden = !P.q.length;
-}
-function addQ(t, front) {
-  front ? P.q.unshift(t) : P.q.push(t); saveQ(); renderDock();
-  toast(front ? "Playing next" : "Added to Next up");
-  if (!P.now) next();
-}
-function stopMedia() { for (const el of [$("#aud"), $("#vid")]) { el.pause(); el.removeAttribute("src"); el.load(); } }
-async function start(t) {
-  P.now = t; renderDock(); stopMedia();
-  const el = t.audio ? $("#aud") : $("#vid"); $("#vid").hidden = t.audio;
-  $("#now").textContent = "Loading: " + t.title;
-  try {
-    el.src = t.src || (await api("/api/stream", { url: t.url, audio: t.audio, quality: $("#q").value })).url;
-    $("#now").textContent = t.title; await el.play();
-  } catch (e) { if (P.now === t) { toast("Couldn't play that: " + e.message, true); renderDock(); } }
-}
-function next() {
-  if (P.q.length) { const t = P.q.shift(); saveQ(); start(t); }
-  else { P.now = null; stopMedia(); $("#vid").hidden = true; renderDock(); }
-}
-for (const el of [$("#aud"), $("#vid")]) {
-  el.addEventListener("ended", next);
-  el.addEventListener("error", () => { if (P.now && el.getAttribute("src")) { toast("This one won't play in the browser. Skipping.", true); next(); } });
-}
-$("#skip").addEventListener("click", next);
-$("#stop").addEventListener("click", () => { P.q.length = 0; saveQ(); next(); });
-$("#qclear").addEventListener("click", () => { P.q.length = 0; saveQ(); renderDock(); });
-async function play(it, audio) {
-  if (S.cfg.watch === "desktop" && S.local) {
-    try { const d = await api("/api/play", { url: it.url, audio, quality: $("#q").value }); toast(`Playing in ${d.player}`); }
-    catch (e) { toast(e.message, true); }
-  } else start(trackOf(it, audio));
-}
-
-// ---------- downloads page ----------
-async function loadFiles() {
-  try { S.files = (await api("/api/downloads")).files; renderFiles(); } catch (e) { $("#files").replaceChildren(h("p", { class: "err" }, e.message)); }
-}
-const fileTrack = f => ({ title: f.name.replace(/\.[^.]+$/, ""), src: "/files/" + encPath(f.path), audio: f.audio });
-function renderFiles() {
-  const q = $("#filter").value.trim().toLowerCase(), list = S.files.filter(f => !q || f.path.toLowerCase().includes(q));
-  $("#dlnote").textContent = `${list.length} file(s). Saved in ${S.output_dir || ""}`;
-  $("#files").replaceChildren(...list.map(f => h("div", { class: "file" },
-    h("div", { class: "nm" }, f.folder ? h("span", { class: "muted" }, f.folder + " / ") : null, f.name),
-    h("span", { class: "muted small" }, fmtSize(f.size)),
-    h("button", { onclick: () => start(fileTrack(f)) }, "Play"),
-    f.audio ? h("button", { onclick: () => addQ(fileTrack(f), false) }, "+ Queue") : null,
-    h("a", { href: "/files/" + encPath(f.path) + "?dl=1", download: f.name }, "Save"))));
-  if (!list.length) $("#files").replaceChildren(h("p", { class: "muted" }, "No finished files yet."));
-}
-$("#filter").addEventListener("input", renderFiles);
-$("#refresh").addEventListener("click", loadFiles);
-$("#playall").addEventListener("click", () => {
-  const a = S.files.filter(f => f.audio && (!$("#filter").value || f.path.toLowerCase().includes($("#filter").value.toLowerCase())));
-  if (!a.length) return toast("No audio files to play.", true);
-  a.forEach(f => P.q.push(fileTrack(f))); saveQ(); renderDock(); if (!P.now) next();
-});
-
-// ---------- requirements page ----------
-async function loadCheck() {
-  const box = $("#checks"); box.replaceChildren(h("p", { class: "muted" }, "Checking..."));
-  try {
-    const d = await api("/api/check");
-    box.replaceChildren(...d.checks.map(c => h("div", { class: "chk" }, h("b", { class: c.ok ? "ok" : "err" }, c.ok ? "[ALRIGHT]" : "[JACK]"),
-      h("span", {}, c.label, c.detail ? h("span", { class: "muted" }, "  " + c.detail) : null, !c.ok ? h("div", { class: "muted small" }, "-> " + c.fix) : null))));
-    const lb = $("#lanbox"); lb.replaceChildren();
-    if (d.lan) lb.append(h("h3", {}, "LAN mode"),
-      h("p", { class: "small" }, d.lan.on ? "On. " : "Off (idle timeout reached). ", d.lan.address ? "Address: " + d.lan.address + " (use the full link with the token from the terminal). " : "",
-        "Anyone on your network can reach the page, but they need the token, the PIN and your approval."),
-      h("p", { class: "muted small" }, "Firewall: " + d.lan.firewall));
-  } catch (e) { box.replaceChildren(h("p", { class: "err" }, e.message)); }
-}
-$("#recheck").addEventListener("click", loadCheck);
-$("#test").addEventListener("click", async () => {
-  const out = $("#testout"); out.className = "small muted"; out.textContent = "Testing a short video...";
-  try { const d = await api("/api/test", {});
-    out.className = "small " + (d.ok ? "ok" : "err");
-    out.textContent = d.ok ? `Works. Resolved "${d.title}" in ${d.secs}s.` : "Failed: " + d.error;
-  } catch (e) { out.className = "small err"; out.textContent = e.message; }
-});
-for (const [id, name] of [["upd", "update"], ["deno", "deno"]]) $("#" + id).addEventListener("click", async () => {
-  try { const d = await api("/api/action", { name }); toast(`Started as job #${d.id}. Watch the terminal.`); show("queue"); }
-  catch (e) { toast(e.message, true); }
-});
-
-// ---------- settings ----------
-function renderSettings() {
-  const c = S.cfg, ps = $("#player");
-  for (const r of $$("input[name=watch]")) { r.checked = r.value === c.watch; r.disabled = !S.local && r.value === "desktop"; }
-  ps.replaceChildren(...(c.players.length ? c.players.map(p => h("option", { value: p }, p)) : [h("option", { value: "" }, "none found")]));
-  ps.value = c.player || ""; ps.disabled = !S.local || !c.players.length;
-  $("#setnote").textContent = !S.local ? "Desktop players can only be chosen on the computer itself. This device uses the browser player."
-    : c.players.length ? "Saved automatically." : "No VLC or mpv found, so the browser player is used.";
-  $("#about").textContent = `SnagIt ${S.version}. Files are saved in ${S.output_dir}.`;
-}
-for (const r of $$("input[name=watch]")) r.addEventListener("change", async () => {
-  try { await api("/api/config", { watch: r.value }); S.cfg.watch = r.value; toast("Saved"); } catch (e) { toast(e.message, true); renderSettings(); }
-});
-$("#player").addEventListener("change", async e => {
-  try { await api("/api/config", { player: e.target.value }); S.cfg.player = e.target.value; toast("Saved"); } catch (er) { toast(er.message, true); }
-});
-
-// ---------- start ----------
-(async function init() {
-  try {
-    const st = await api("/api/state");
-    Object.assign(S, { cfg: st.config, local: st.local, quals: st.qualities, dq: st.default_quality, version: st.version, output_dir: st.output_dir });
-    if (!S.local) S.cfg.watch = "browser";
-    $("#q").replaceChildren(...S.quals.map(q => h("option", { value: q }, q + "p"))); $("#q").value = S.dq;
-    if (!st.has_ytdlp) toast("yt-dlp is missing. Open Requirements and press Update yt-dlp.", true);
-    renderDock(); renderJobs(); listen();
-    show(location.pathname === "/check" || st.start_view === "check" ? "check" : "home");
-  } catch (e) { $("#out").replaceChildren(h("p", { class: "err" }, "Can't reach SnagIt: " + e.message)); }
-})();
-"""
 
 
 # ---------- command line (one-liner) mode ----------

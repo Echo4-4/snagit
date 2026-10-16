@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en" data-theme="dark"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SnagIt</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 954 853'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%234cc2ff'/%3E%3Cstop offset='1' stop-color='%23ff5fb7'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath fill='url(%23g)' fill-rule='evenodd' d='M569.0 851.0 564.9 851.0 563.4 850.0 563.4 849.0 702.2 596.0 703.4 585.0 701.9 574.0 700.2 569.0 691.9 553.0 680.0 540.0 664.0 529.3 647.0 521.5 636.0 519.3 614.0 516.9 586.0 510.4 564.0 506.7 507.0 501.5 395.0 499.7 365.0 498.3 308.0 494.2 275.0 490.7 240.0 485.8 189.0 475.3 167.0 469.2 137.6 459.0 122.0 452.3 97.0 438.3 78.4 425.0 62.0 409.7 51.9 398.0 40.0 379.9 30.8 360.0 24.8 340.0 21.6 322.0 20.2 298.0 22.0 262.0 24.8 242.0 28.6 224.0 37.8 195.0 45.0 178.4 55.6 159.0 68.5 140.0 81.0 125.0 98.1 108.0 116.3 93.0 134.0 80.9 160.0 65.8 199.0 47.7 238.0 33.5 269.0 24.5 290.0 19.5 330.0 11.9 379.0 5.5 439.0 1.9 475.0 1.1 505.0 1.5 532.0 3.0 566.0 5.6 632.0 14.6 685.0 24.7 744.0 38.7 804.0 56.5 857.0 75.7 910.0 98.8 936.9 113.0 913.4 171.0 892.4 227.0 890.0 230.1 865.0 216.1 563.3 37.0 543.2 27.0 523.0 23.0 505.0 22.5 493.0 24.2 486.0 26.3 477.0 30.5 465.3 38.0 457.9 46.0 452.5 55.0 450.5 68.0 438.0 189.0 438.3 195.0 436.5 213.0 432.8 248.0 431.2 255.0 413.9 423.0 414.1 427.0 417.1 436.0 423.0 445.4 429.0 451.8 440.9 461.0 447.0 464.3 459.0 468.8 472.0 471.6 481.0 472.4 495.0 472.3 506.0 470.2 792.4 373.0 800.0 371.7 829.6 383.0 858.0 397.4 881.0 412.4 893.0 422.0 902.6 431.0 919.2 450.0 926.1 460.0 933.4 473.0 938.2 483.0 943.4 497.0 947.5 512.0 950.0 526.0 952.9 557.0 950.1 598.0 945.0 630.5 936.0 663.0 923.4 693.0 907.2 720.0 897.3 733.0 887.6 744.0 865.0 765.0 851.0 775.6 837.0 784.6 809.0 799.4 775.0 813.5 734.0 826.5 696.0 835.3 650.6 843.0 618.7 847.0ZM378.0 847.3 357.0 845.7 324.0 841.6 262.0 831.5 213.0 821.2 178.0 812.3 131.0 798.4 80.0 780.3 33.0 760.4 2.0 745.0 2.9 742.0 35.6 690.0 63.5 639.0 77.4 611.0 90.4 582.0 113.7 524.0 116.0 524.1 161.1 548.0 168.2 560.0 182.7 580.0 377.5 843.0 379.2 846.0Z'/%3E%3C/svg%3E">
+<script>try{var t=localStorage.getItem("snagit_theme");document.documentElement.dataset.theme=t||(matchMedia("(prefers-color-scheme: light)").matches?"light":"dark")}catch(e){}</script>
+<style>
+:root{--sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,Roboto,"Helvetica Neue",sans-serif;--mono:ui-monospace,"Cascadia Code","JetBrains Mono",Menlo,monospace}
+:root,[data-theme=dark]{--bg:#0f1115;--sf:#1a1d24;--fg:#eceef3;--mut:#9399a8;--line:#2c313c;--acc:#4cc2ff;--acc2:#ff5fb7;--on:#04141c;--ok:#4ade80;--bad:#ff6b6b;color-scheme:dark}
+[data-theme=light]{--bg:#f5f6fa;--sf:#fff;--fg:#1b1d26;--mut:#636a7a;--line:#d8dce6;--acc:#0a75c2;--acc2:#c0258c;--on:#fff;--ok:#157a3d;--bad:#c42b2b;color-scheme:light}
+[data-theme=dracula]{--bg:#282a36;--sf:#343746;--fg:#f8f8f2;--mut:#a5abc9;--line:#4a4d63;--acc:#bd93f9;--acc2:#ff79c6;--on:#21222c;--ok:#50fa7b;--bad:#ff5555;color-scheme:dark}
+[data-theme=mocha]{--bg:#1e1e2e;--sf:#313244;--fg:#cdd6f4;--mut:#a6adc8;--line:#45475a;--acc:#cba6f7;--acc2:#f5c2e7;--on:#1e1e2e;--ok:#a6e3a1;--bad:#f38ba8;color-scheme:dark}
+[data-theme=latte]{--bg:#eff1f5;--sf:#e6e9ef;--fg:#4c4f69;--mut:#6c6f85;--line:#bcc0cc;--acc:#8839ef;--acc2:#ea76cb;--on:#eff1f5;--ok:#40a02b;--bad:#d20f39;color-scheme:light}
+[data-theme=nord]{--bg:#2e3440;--sf:#3b4252;--fg:#eceff4;--mut:#aab3c5;--line:#4c566a;--acc:#88c0d0;--acc2:#b48ead;--on:#2e3440;--ok:#a3be8c;--bad:#bf616a;color-scheme:dark}
+[data-theme=tokyo]{--bg:#1a1b26;--sf:#24283b;--fg:#c0caf5;--mut:#8b93bd;--line:#3b4261;--acc:#7aa2f7;--acc2:#bb9af7;--on:#1a1b26;--ok:#9ece6a;--bad:#f7768e;color-scheme:dark}
+[data-theme=gruvbox]{--bg:#282828;--sf:#3c3836;--fg:#ebdbb2;--mut:#a89984;--line:#504945;--acc:#fabd2f;--acc2:#fe8019;--on:#282828;--ok:#b8bb26;--bad:#fb4934;color-scheme:dark}
+[data-theme=rose]{--bg:#191724;--sf:#26233a;--fg:#e0def4;--mut:#908caa;--line:#403d52;--acc:#ebbcba;--acc2:#c4a7e7;--on:#191724;--ok:#9ccfd8;--bad:#eb6f92;color-scheme:dark}
+[data-theme=terminal]{--bg:#05080a;--sf:#0d1519;--fg:#d7f5ff;--mut:#6f929e;--line:#183039;--acc:#00e5ff;--acc2:#3dffa0;--on:#021014;--ok:#3dffa0;--bad:#ff5c7a;color-scheme:dark}
+*{box-sizing:border-box}[hidden]{display:none!important}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 var(--sans);padding-bottom:5.5rem;accent-color:var(--acc)}
+h2{margin:0 0 .6rem;font-size:1.6rem;letter-spacing:-.02em}h3{margin:0;font-size:1rem;overflow-wrap:anywhere}
+a{color:var(--acc)}code{background:var(--sf);padding:.1rem .35rem;border-radius:4px;font-family:var(--mono)}
+button,select,input[type=text],input[type=search],input:not([type]){font:inherit;color:inherit;background:var(--sf);border:1px solid var(--line);border-radius:10px;padding:.5rem .8rem}
+button{cursor:pointer}button:hover:not(:disabled){border-color:var(--acc)}button:disabled{opacity:.5;cursor:default}
+button.pri{background:var(--acc);border-color:var(--acc);color:var(--on);font-weight:700}
+:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
+.muted{color:var(--mut)}.small{font-size:.85rem}.err{color:var(--bad)}.ok{color:var(--ok)}
+.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.5rem 0}
+.badge{background:var(--acc2);color:var(--on);border-radius:99px;padding:0 .45rem;font-size:.75rem}
+/* header: nav left, logo top right */
+#top{position:fixed;inset:0 0 auto;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:.7rem clamp(1rem,4vw,2.5rem);transition:background .25s}
+#top.solid{background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+#nav{display:flex;gap:.2rem;overflow-x:auto;scrollbar-width:none}
+#nav button{background:none;border:0;border-radius:99px;padding:.4rem .8rem;color:var(--mut);white-space:nowrap}
+#nav button:hover,#nav button.on{color:var(--fg);background:var(--sf)}
+.right{display:flex;align-items:center;gap:.8rem;margin-left:auto}
+.logo{display:flex;align-items:center;gap:.5rem;font-weight:800;font-size:1.45rem;letter-spacing:-.03em;color:var(--fg);text-decoration:none}
+.defs{position:absolute;width:0;height:0;overflow:hidden}.g0{stop-color:var(--acc)}.g1{stop-color:var(--acc2)}
+.mark{display:block;flex:none;width:2.15rem;aspect-ratio:954/853;fill:url(#lg);filter:drop-shadow(0 0 7px color-mix(in srgb,var(--acc) 40%,transparent))}
+.thw{position:relative}#themeMenu{position:absolute;right:0;top:calc(100% + .5rem);width:min(300px,90vw);display:grid;grid-template-columns:1fr 1fr;gap:.4rem;padding:.5rem;background:var(--sf);border:1px solid var(--line);border-radius:14px;box-shadow:0 14px 50px #0008}
+.th{display:flex;align-items:center;gap:.5rem;background:var(--bg);padding:.4rem .5rem;font-size:.85rem;text-align:left}.th.on{border-color:var(--acc)}
+.sw{display:flex;flex:none;border-radius:6px;overflow:hidden;border:1px solid var(--line)}.sw i{width:.7rem;height:1.2rem}
+/* hero */
+.hero{position:relative;min-height:100svh;display:grid;place-items:center;overflow:hidden;padding:6rem 1rem 8rem}
+.stage,.veil{position:absolute;inset:0}.veil{pointer-events:none;background:radial-gradient(ellipse 60% 55% at 50% 46%,color-mix(in srgb,var(--bg) 80%,transparent),transparent 80%),linear-gradient(to bottom,color-mix(in srgb,var(--bg) 55%,transparent),transparent 28%,transparent 55%,var(--bg))}
+.slide{position:absolute;inset:0;opacity:0;pointer-events:none;transition:opacity 1.1s}.slide.on{opacity:1;pointer-events:auto}
+.slide::before{content:"";position:absolute;inset:0;background:radial-gradient(55% 60% at 82% 28%,color-mix(in srgb,var(--acc) 34%,transparent),transparent),radial-gradient(45% 50% at 14% 82%,color-mix(in srgb,var(--acc2) 28%,transparent),transparent)}
+.slide:nth-child(even)::before{transform:scaleX(-1)}
+.art{position:absolute;right:-3%;top:13%;width:min(600px,58vw);transform:perspective(1400px) rotateY(-18deg) rotateX(5deg);transform-origin:right center}
+.slide:nth-child(even) .art{right:auto;left:-3%;transform:perspective(1400px) rotateY(18deg) rotateX(5deg);transform-origin:left center}
+.slide.on .art{animation:drift 12s ease-in-out infinite alternate}
+.chips{position:absolute;left:4%;bottom:26%;display:flex;flex-direction:column;gap:.55rem;align-items:flex-start;transform:rotate(-4deg)}
+.slide:nth-child(even) .chips{left:auto;right:4%;align-items:flex-end;transform:rotate(4deg)}
+.chips span{padding:.4rem .9rem;border:1px solid var(--line);border-radius:99px;background:color-mix(in srgb,var(--sf) 82%,transparent);font:600 .8rem var(--mono)}
+.center{position:relative;z-index:2;width:min(780px,100%);margin-top:-5vh;text-align:center}
+.center h1{margin:0;font-size:clamp(2.3rem,6.2vw,4.4rem);font-weight:800;letter-spacing:-.035em;line-height:1.04;text-wrap:balance}
+.sub{margin:.9rem 0 1.6rem;font-size:1.15rem;color:var(--mut)}
+.box{display:flex;gap:.4rem;padding:.4rem;border-radius:99px;background:color-mix(in srgb,var(--sf) 90%,transparent);border:1px solid var(--line);backdrop-filter:blur(10px);box-shadow:0 18px 60px #0005}
+.box:focus-within{border-color:var(--acc);box-shadow:0 0 0 4px color-mix(in srgb,var(--acc) 28%,transparent),0 18px 60px #0005}
+.box input{flex:1;min-width:0;background:none!important;border:0!important;outline:none;font-size:1.1rem;padding:.8rem 1.1rem}.box button{border-radius:99px;padding:.7rem 1.3rem}
+.center .row{justify-content:center}
+.cap{position:absolute;z-index:2;left:0;right:0;bottom:1.8rem;display:flex;justify-content:space-between;align-items:flex-end;gap:1.5rem;padding:0 clamp(1rem,4vw,2.5rem)}
+.capx{display:grid;gap:.15rem;max-width:34rem}.capx b{font-size:1.1rem}
+.dots{display:flex;gap:.5rem}.dots button{width:2.4rem;height:6px;padding:0;border:0;border-radius:3px;background:var(--line);position:relative;overflow:hidden}
+.dots .on::after{content:"";position:absolute;inset:0;background:var(--acc);transform-origin:left;animation:prog 7s linear forwards}
+/* demo mocks */
+.win{background:var(--sf);border:1px solid var(--line);border-radius:14px;box-shadow:0 30px 80px #0007;overflow:hidden}
+.wbar{display:flex;gap:.35rem;align-items:center;padding:.6rem .8rem;border-bottom:1px solid var(--line)}.wbar i{width:.6rem;height:.6rem;border-radius:50%;background:var(--line)}.wbar b{margin-left:.5rem;font:600 .75rem var(--mono);color:var(--mut)}
+.wbody{padding:1.1rem;display:grid;gap:.8rem}.wbody small{color:var(--mut)}
+.mbox{font:.9rem var(--mono);padding:.7rem .9rem;border:1px solid var(--acc);border-radius:10px}.mbox u{display:inline-block;width:.5rem;height:1em;background:var(--acc);vertical-align:-.15em;animation:blink 1s steps(2) infinite}
+.mcard{display:flex;gap:.9rem;align-items:center}.mi{display:grid;gap:.25rem;flex:1}.mth{width:110px;aspect-ratio:16/9;border-radius:8px;background:linear-gradient(135deg,var(--acc),var(--acc2));flex:none}
+.mbar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}.mbar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2))}.slide.on .mbar i{animation:fill 5s ease-out forwards}
+.mrow{display:flex;gap:.7rem;align-items:center}.mrow small{margin-left:auto}.ck{width:1.05rem;height:1.05rem;border:2px solid var(--line);border-radius:5px;flex:none}
+.slide.on .ck{animation:tick .3s forwards}.mrow:nth-child(1) .ck{animation-delay:.6s}.mrow:nth-child(2) .ck{animation-delay:1.4s}.mrow:nth-child(3) .ck{animation-delay:2.2s}.mrow:nth-child(4) .ck{animation-delay:3s}.mrow:nth-child(5) .ck{animation:none}
+.wave{display:flex;gap:4px;align-items:flex-end;height:90px}.wave i{flex:1;height:20%;border-radius:3px;background:linear-gradient(var(--acc),var(--acc2))}
+.slide.on .wave i{animation:eq 1.1s ease-in-out infinite alternate}.wave i:nth-child(3n){animation-delay:-.4s}.wave i:nth-child(3n+1){animation-delay:-.8s;animation-duration:.8s}
+.lan{display:flex;gap:1.1rem;align-items:center}.lan>div:last-child{display:grid;gap:.3rem}.pin{font:700 1.6rem var(--mono);letter-spacing:.15em;color:var(--acc)}
+.qr{width:120px;flex:none;display:grid;grid-template-columns:repeat(9,1fr);gap:2px;padding:6px;background:#fff;border-radius:8px}.qr i{aspect-ratio:1;background:#111}.qr i:nth-child(3n+2),.qr i:nth-child(7n+4){background:#fff}
+.swg{display:grid;grid-template-columns:repeat(2,1fr);gap:.5rem}
+@keyframes drift{to{transform:perspective(1400px) rotateY(-13deg) rotateX(3deg) translateY(-14px)}}
+@keyframes prog{from{transform:scaleX(0)}}@keyframes blink{50%{opacity:0}}@keyframes fill{to{width:78%}}
+@keyframes tick{to{background:var(--acc);border-color:var(--acc)}}@keyframes eq{to{height:95%}}
+/* sections */
+.sec{padding:4.5rem 0;border-top:1px solid var(--line);scroll-margin-top:3.4rem}.wrap{max-width:1100px;margin:0 auto;padding:0 clamp(1rem,4vw,2rem)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:1.1rem;margin-bottom:1rem}
+.card{display:flex;flex-direction:column;background:var(--sf);border-radius:12px;overflow:hidden;border:1px solid var(--line);transition:transform .2s,border-color .2s}.card:hover{transform:translateY(-4px);border-color:var(--acc)}
+.card img{width:100%;aspect-ratio:16/9;object-fit:cover;background:var(--line)}.info{padding:.7rem .85rem .85rem;min-width:0;flex:1;display:flex;flex-direction:column;gap:.2rem}
+.btns{display:flex;flex-wrap:wrap;gap:.35rem;margin-top:auto;padding-top:.5rem}.btns button{padding:.3rem .65rem;font-size:.85rem}
+.tools{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.6rem 0;padding:.5rem 0}.tools .grow{flex:1;min-width:8rem}
+.pl{display:flex;gap:.6rem;align-items:center;padding:.35rem .4rem;border-bottom:1px solid var(--line);user-select:none;cursor:pointer}.pl:hover{background:var(--sf)}
+.pl img{width:80px;height:45px;object-fit:cover;border-radius:4px;flex:none;background:var(--line)}.pl .n{width:2.6rem;text-align:right;color:var(--mut);flex:none;font-variant-numeric:tabular-nums}.pl .t{flex:1;min-width:0;overflow-wrap:anywhere}.pl .d{color:var(--mut);flex:none}
+.job{padding:.8rem;margin:.5rem 0;background:var(--sf);border:1px solid var(--line);border-radius:12px}
+.bar{height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:.4rem 0}.bar i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+.pill{font-size:.75rem;border:1px solid var(--line);border-radius:99px;padding:0 .5rem;margin:0 .4rem}
+.chk{display:flex;gap:.6rem;align-items:baseline;padding:.4rem 0;border-bottom:1px solid var(--line)}.chk b{min-width:5.5rem;font-family:var(--mono)}
+.file{display:flex;flex-wrap:wrap;gap:.4rem .8rem;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--line)}.file .nm{flex:1;min-width:12rem;overflow-wrap:anywhere}.file a,.file button{font-size:.85rem}
+fieldset{border:1px solid var(--line);border-radius:12px;display:grid;gap:.6rem}
+#dock{position:fixed;left:0;right:0;bottom:0;background:var(--sf);border-top:1px solid var(--line);padding:.5rem .8rem;z-index:40}
+#vid{width:100%;max-height:45vh;background:#000;border-radius:8px}.dockbar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+.now{flex:1 1 12rem;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:600}#aud{flex:2 1 14rem;height:36px;min-width:0}
+#qlist .qi{display:flex;gap:.4rem;align-items:center;padding:.2rem 0}#qlist .qi span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#toast{position:fixed;left:50%;bottom:6rem;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:.5rem 1rem;border-radius:8px;opacity:0;pointer-events:none;transition:opacity .2s;max-width:90vw;z-index:60}#toast.show{opacity:1}#toast.bad{background:var(--bad);color:#fff}
+#pair{position:fixed;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;padding:1rem}.pairbox{width:min(26rem,100%)}.pairbox input{letter-spacing:.3rem;text-align:center}
+
+/* floating logo outline + terminal (behind the demo windows) */
+.floaters{position:absolute;inset:0;overflow:hidden;pointer-events:none}
+.ghost{position:absolute;left:50%;top:50%;width:min(900px,115vw);aspect-ratio:954/853;translate:-50% -50%;fill:none;stroke:url(#lg);stroke-width:2.2;stroke-linejoin:round;opacity:.3;animation:bob 14s ease-in-out infinite alternate}
+.term{position:absolute;right:3%;top:60%;width:min(450px,42vw);background:color-mix(in srgb,var(--bg) 72%,#000);border:1px solid var(--line);border-radius:12px;box-shadow:0 30px 80px #0007;overflow:hidden;font:.8rem/1.6 var(--mono);transform:perspective(1400px) rotateY(-16deg) rotateX(4deg);transform-origin:right center;animation:drift2 10s ease-in-out infinite alternate}
+.term .tb{display:flex;gap:.35rem;align-items:center;padding:.55rem .8rem;background:var(--sf);border-bottom:1px solid var(--line)}.term .tb i{width:.6rem;height:.6rem;border-radius:50%;background:var(--line)}.term .tb b{margin-left:.5rem;font-size:.72rem;color:var(--mut)}
+.term pre{margin:0;padding:.85rem 1rem 1rem;height:9.6em;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--fg);font:inherit}
+.term .p{color:var(--acc2)}.term .c{color:var(--acc)}.term .o{color:var(--mut)}.term .g{color:var(--ok)}
+.caret{display:inline-block;width:.5em;height:1.05em;background:var(--acc);vertical-align:-.2em;animation:blink 1s steps(2) infinite}
+@keyframes bob{to{transform:translateY(-16px) rotate(2deg)}}@keyframes drift2{to{transform:perspective(1400px) rotateY(-11deg) rotateX(2deg) translateY(-12px)}}
+/* scroll areas, download queue, footer */
+.scroll{max-height:min(62vh,34rem);overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--line);border-radius:12px;scrollbar-width:thin;scrollbar-color:var(--acc) transparent}
+.scroll>.pl:last-child,.scroll>.dqi:last-child{border-bottom:0}
+#jobs{max-height:min(60vh,34rem);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--acc) transparent}
+.dqi{display:flex;gap:.6rem;align-items:center;padding:.4rem .6rem;border-bottom:1px solid var(--line)}.dqi:hover{background:var(--sf)}
+.dqi .n{width:2.2rem;text-align:right;color:var(--mut);flex:none;font-variant-numeric:tabular-nums}.dqi .t{flex:1;min-width:0;overflow-wrap:anywhere}.dqi .d{color:var(--mut);flex:none}.dqi button{padding:.2rem .6rem;font-size:.85rem}
+.grow{flex:1}.gap{margin-top:1.6rem}
+#foot{border-top:1px solid var(--line);padding:2.4rem 0 1.6rem;text-align:center;color:var(--mut)}
+#foot .wrap{display:grid;justify-items:center;gap:.45rem}#foot .mark{width:2.6rem}#foot b{color:var(--fg)}
+#foot a{font-family:var(--mono);text-decoration:none}#foot a:hover{text-decoration:underline}
+@media (max-width:760px){.term{right:2%;top:60%;width:78vw;opacity:.55}#top{flex-wrap:wrap;gap:.4rem}#nav{order:2;width:100%}.sec{scroll-margin-top:6rem}.hero{padding-top:8rem}.art{width:92vw;top:9%;opacity:.45}.chips{display:none}.cap{flex-direction:column;align-items:flex-start}.box button{padding:.7rem 1rem}}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}.mbar i{width:78%}.dots .on::after{transform:none}.ck{background:var(--acc)}.wave i{height:60%}}
+</style></head>
+<body>
+<svg class="defs" aria-hidden="true" focusable="false"><defs><linearGradient id="lg" x1="0" y1="0" x2="1" y2="1"><stop class="g0" offset="0"/><stop class="g1" offset="1"/></linearGradient><symbol id="snag-logo" viewBox="0 0 954 853"><path fill-rule="evenodd" d="M569.0 851.0 564.9 851.0 563.4 850.0 563.4 849.0 702.2 596.0 703.4 585.0 701.9 574.0 700.2 569.0 691.9 553.0 680.0 540.0 664.0 529.3 647.0 521.5 636.0 519.3 614.0 516.9 586.0 510.4 564.0 506.7 507.0 501.5 395.0 499.7 365.0 498.3 308.0 494.2 275.0 490.7 240.0 485.8 189.0 475.3 167.0 469.2 137.6 459.0 122.0 452.3 97.0 438.3 78.4 425.0 62.0 409.7 51.9 398.0 40.0 379.9 30.8 360.0 24.8 340.0 21.6 322.0 20.2 298.0 22.0 262.0 24.8 242.0 28.6 224.0 37.8 195.0 45.0 178.4 55.6 159.0 68.5 140.0 81.0 125.0 98.1 108.0 116.3 93.0 134.0 80.9 160.0 65.8 199.0 47.7 238.0 33.5 269.0 24.5 290.0 19.5 330.0 11.9 379.0 5.5 439.0 1.9 475.0 1.1 505.0 1.5 532.0 3.0 566.0 5.6 632.0 14.6 685.0 24.7 744.0 38.7 804.0 56.5 857.0 75.7 910.0 98.8 936.9 113.0 913.4 171.0 892.4 227.0 890.0 230.1 865.0 216.1 563.3 37.0 543.2 27.0 523.0 23.0 505.0 22.5 493.0 24.2 486.0 26.3 477.0 30.5 465.3 38.0 457.9 46.0 452.5 55.0 450.5 68.0 438.0 189.0 438.3 195.0 436.5 213.0 432.8 248.0 431.2 255.0 413.9 423.0 414.1 427.0 417.1 436.0 423.0 445.4 429.0 451.8 440.9 461.0 447.0 464.3 459.0 468.8 472.0 471.6 481.0 472.4 495.0 472.3 506.0 470.2 792.4 373.0 800.0 371.7 829.6 383.0 858.0 397.4 881.0 412.4 893.0 422.0 902.6 431.0 919.2 450.0 926.1 460.0 933.4 473.0 938.2 483.0 943.4 497.0 947.5 512.0 950.0 526.0 952.9 557.0 950.1 598.0 945.0 630.5 936.0 663.0 923.4 693.0 907.2 720.0 897.3 733.0 887.6 744.0 865.0 765.0 851.0 775.6 837.0 784.6 809.0 799.4 775.0 813.5 734.0 826.5 696.0 835.3 650.6 843.0 618.7 847.0ZM378.0 847.3 357.0 845.7 324.0 841.6 262.0 831.5 213.0 821.2 178.0 812.3 131.0 798.4 80.0 780.3 33.0 760.4 2.0 745.0 2.9 742.0 35.6 690.0 63.5 639.0 77.4 611.0 90.4 582.0 113.7 524.0 116.0 524.1 161.1 548.0 168.2 560.0 182.7 580.0 377.5 843.0 379.2 846.0Z"/></symbol></defs></svg>
+<header id="top">
+<nav id="nav" aria-label="Sections">
+<button data-view="home" class="on">Home</button>
+<button data-view="queue">Queue <span id="badge" class="badge" hidden></span></button>
+<button data-view="dl">Downloads</button>
+<button data-view="check">Requirements</button>
+<button data-view="set">Settings</button>
+</nav>
+<div class="right">
+<div class="thw"><button id="themeBtn" type="button" aria-expanded="false">Theme</button><div id="themeMenu" hidden></div></div>
+<a class="logo" id="logo" href="/" aria-label="SnagIt, back to top"><svg class="mark" viewBox="0 0 954 853" aria-hidden="true"><use href="#snag-logo"/></svg>SnagIt</a>
+</div>
+</header>
+<main>
+<section id="home" data-v="home" class="hero">
+<div class="floaters" aria-hidden="true"><svg class="ghost" viewBox="0 0 954 853"><use href="#snag-logo"/></svg>
+<div class="term"><div class="tb"><i></i><i></i><i></i><b>terminal</b></div><pre id="termout"></pre></div></div>
+<div class="stage" id="stage"></div><div class="veil"></div>
+<div class="center">
+<h1>Snag any video, playlist or song.</h1>
+<p class="sub">Paste a link or search YouTube. Files save to your computer.</p>
+<div class="box">
+<input id="box" type="text" autocomplete="off" spellcheck="false" autofocus placeholder="Paste a YouTube link, a playlist link, or type what to search for">
+<button id="paste" type="button" title="Paste from clipboard">Paste</button><button id="go" class="pri" type="button">Go</button>
+</div>
+<div class="row small"><label>Quality for Download buttons <select id="q"></select></label></div>
+<p class="muted small">Playlist link: a checklist. Video link: one card. Anything else: a YouTube search. Ctrl+V anywhere works too.</p>
+</div>
+<div class="cap"><div class="capx"><b id="capT"></b><span id="capD" class="muted"></span></div><div class="dots" id="dots"></div></div>
+</section>
+<section id="results" data-v="results" class="sec" hidden><div class="wrap"><div id="out"></div></div></section>
+<section id="s-queue" data-v="queue" class="sec"><div class="wrap"><h2>Queue</h2>
+<p class="muted small">Press <b>+ Queue</b> on a video, or <b>Add selected to queue</b> on a playlist, to keep it here. Nothing downloads until you press <b>Download all</b>.</p>
+<div class="row"><h3 id="dqn">Ready to download</h3><span class="grow"></span>
+<select id="dqq" aria-label="Quality for Download all"></select><button id="dqgo" class="pri" type="button">Download all</button><button id="dqclear" type="button">Clear list</button></div>
+<div id="dq"></div>
+<h3 class="gap">Downloads</h3>
+<p class="muted small">One download runs at a time, in the terminal where <code>snagit --web</code> is running. Closing this tab does not stop anything. Ctrl+C in the terminal cancels the current job.</p>
+<div id="jobs"></div></div></section>
+<section id="s-dl" data-v="dl" class="sec"><div class="wrap"><h2>Downloads</h2>
+<div class="row"><input id="filter" type="search" placeholder="Filter files"><button id="playall">Play all audio</button><button id="refresh">Refresh</button></div>
+<p class="muted small" id="dlnote"></p><div id="files"></div></div></section>
+<section id="s-check" data-v="check" class="sec"><div class="wrap"><h2>Requirements</h2>
+<div id="checks"><p class="muted">Checking...</p></div>
+<div class="row"><button id="recheck">Check again</button><button id="upd">Update yt-dlp</button><button id="deno">Install Deno</button><button id="test" class="pri">Test</button></div>
+<p id="testout" class="small"></p><div id="lanbox"></div></div></section>
+<section id="s-set" data-v="set" class="sec"><div class="wrap"><h2>Settings</h2>
+<fieldset><legend>Watch and Audio buttons play in</legend>
+<label><input type="radio" name="watch" value="browser"> This page (browser)</label>
+<label><input type="radio" name="watch" value="desktop"> A desktop player on the computer (VLC / mpv)</label>
+<label>Desktop player <select id="player"></select></label>
+<p class="muted small" id="setnote"></p></fieldset>
+<p class="muted small" id="about"></p></div></section>
+</main>
+<footer id="foot"><div class="wrap">
+<svg class="mark" viewBox="0 0 954 853" aria-hidden="true"><use href="#snag-logo"/></svg>
+<div>Made by <b>Echo404</b></div>
+<a href="https://x.com/JeffreyPeter_" target="_blank" rel="noopener noreferrer">@JeffreyPeter_</a>
+</div></footer>
+<div id="dock" hidden>
+<video id="vid" controls playsinline hidden></video>
+<div class="dockbar"><div class="now" id="now">Nothing playing</div><audio id="aud" controls></audio><button id="skip">Skip</button><button id="stop">Stop</button></div>
+<details id="qwrap"><summary id="qsum">Next up (0)</summary><div id="qlist"></div><button id="qclear" class="small">Clear list</button></details>
+</div>
+<div id="pair" hidden><div class="pairbox"><h2>Connect this device</h2>
+<p>Enter the 6-digit PIN shown in the terminal on the computer, then approve this device there.</p>
+<div class="box"><input id="pin" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456"><button id="pgo" class="pri" type="button">Connect</button></div>
+<p id="pmsg" class="small"></p></div></div>
+<div id="toast" role="status"></div>
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s), $$ = (s, r = document) => [...r.querySelectorAll(s)];
+function h(tag, a, ...kids) {
+  const e = document.createElement(tag);
+  for (const k in a || {}) {
+    const v = a[k];
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of kids.flat()) { if (c == null || c === false) continue; e.append(c.nodeType ? c : document.createTextNode(c)); }
+  return e;
+}
+const S = { cfg: { watch: "browser", player: "", players: [] }, local: true, quals: [], dq: "720", jobs: [], files: [], lan: {} };
+let toastT;
+function toast(msg, bad) { const t = $("#toast"); t.textContent = msg; t.className = "show" + (bad ? " bad" : ""); clearTimeout(toastT); toastT = setTimeout(() => t.className = "", 3800); }
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(path, opt);
+  let d = {}; try { d = await r.json(); } catch (e) {}
+  if (!r.ok || d.error) { const e = new Error(d.error || ("HTTP " + r.status)); e.status = r.status; throw e; }
+  return d;
+}
+const pad = n => String(n).padStart(2, "0");
+const fmtDur = s => { if (!s) return "--:--"; s = Math.floor(s); const H = Math.floor(s / 3600), M = Math.floor(s % 3600 / 60), X = s % 60; return H ? `${H}:${pad(M)}:${pad(X)}` : `${M}:${pad(X)}`; };
+const fmtViews = n => { if (n == null) return ""; for (const [d, x] of [[1e9, "B"], [1e6, "M"], [1e3, "K"]]) if (n >= d) return (n / d).toFixed(1).replace(".0", "") + x + " views"; return n + " views"; };
+const fmtSize = n => { for (const u of ["B", "KB", "MB", "GB"]) { if (n < 1024 || u === "GB") return (u === "B" ? n : n.toFixed(1)) + " " + u; n /= 1024; } };
+const thumb = id => "https://i.ytimg.com/vi/" + encodeURIComponent(id) + "/mqdefault.jpg";
+const encPath = p => p.split("/").map(encodeURIComponent).join("/");
+
+// ---------- sections (one scrolling page) ----------
+const mark = v => { for (const b of $$("#nav button")) b.classList.toggle("on", b.dataset.view === v); };
+const calm = matchMedia("(prefers-reduced-motion: reduce)").matches;
+function show(v) {
+  const el = $(`section[data-v="${v}"]`); if (!el) return;
+  el.hidden = false; el.scrollIntoView({ behavior: calm ? "auto" : "smooth", block: "start" }); mark(v === "results" ? "home" : v);
+}
+function loadSec(v) { if (v === "dl") loadFiles(); if (v === "check") loadCheck(); if (v === "set") renderSettings(); }
+for (const b of $$("#nav button")) b.addEventListener("click", () => show(b.dataset.view));
+
+// ---------- the one box ----------
+let seq = 0;
+async function go(text) {
+  text = (text || "").trim(); if (!text) return;
+  $("#box").value = text; $("#results").hidden = false; show("results");
+  const out = $("#out"), my = ++seq;
+  out.replaceChildren(h("p", { class: "muted" }, "Looking..."));
+  try {
+    const d = await api("/api/lookup?q=" + encodeURIComponent(text));
+    if (my !== seq) return;
+    if (d.kind === "search") renderSearch(d);
+    else if (d.kind === "playlist") renderPlaylist(d);
+    else out.replaceChildren(card(d.item));
+  } catch (e) { if (my === seq) out.replaceChildren(h("p", { class: "err" }, e.message)); }
+}
+$("#go").addEventListener("click", () => go($("#box").value));
+$("#box").addEventListener("keydown", e => { if (e.key === "Enter") go(e.target.value); });
+$("#box").addEventListener("paste", () => setTimeout(() => { if (/^https?:\/\//i.test($("#box").value.trim())) go($("#box").value); }, 0));
+$("#paste").addEventListener("click", async () => {
+  try { const t = await navigator.clipboard.readText(); t ? go(t) : toast("The clipboard is empty."); }
+  catch (e) { $("#box").focus(); toast("Can't read the clipboard here. Paste into the box instead (long-press on a phone).", true); }
+});
+document.addEventListener("paste", e => {
+  const t = e.target; if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+  const txt = e.clipboardData && e.clipboardData.getData("text"); if (txt) { e.preventDefault(); go(txt); }
+});
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", e => {
+  e.preventDefault(); const dt = e.dataTransfer; if (!dt) return;
+  const raw = dt.getData("text/uri-list") || dt.getData("text/plain") || "";
+  const line = raw.split(/\r?\n/).find(l => l.trim() && !l.startsWith("#")); if (line) go(line);
+});
+
+// ---------- cards ----------
+async function queueDownload(body, label) {
+  try { const d = await api("/api/download", body); toast(`Queued as job #${d.id}${label ? ": " + label : ""}. It runs in the terminal.`); }
+  catch (e) { toast(e.message, true); }
+}
+const dlVideo = (it, q) => queueDownload({ kind: "video", url: it.url, quality: q, title: it.title }, it.title);
+function card(it) {
+  const meta = [it.channel, it.live ? "LIVE" : fmtDur(it.duration), fmtViews(it.views)].filter(Boolean).join(" | ");
+  const b = (t, f, title) => h("button", { onclick: f, title }, t);
+  return h("article", { class: "card" },
+    h("img", { src: thumb(it.id), alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: e => e.target.style.visibility = "hidden" }),
+    h("div", { class: "info" }, h("h3", {}, it.title), h("div", { class: "muted small" }, meta),
+      h("div", { class: "btns" },
+        b("Watch", () => play(it, false)), b("Audio", () => play(it, true)),
+        b("Download", () => dlVideo(it, $("#q").value)), b("MP3", () => dlVideo(it, "mp3")),
+        b("+ Queue", () => addDQ(it), "Add to the download queue"))));
+}
+function renderSearch(d) {
+  const out = $("#out"), list = h("div", { class: "grid" }), more = h("button", {}, "Load more");
+  let offset = 0;
+  const add = r => { offset += r.items.length; r.items.forEach(it => list.append(card(it))); more.hidden = !r.more || !r.items.length;
+    if (!offset) list.append(h("p", { class: "muted" }, "No results.")); };
+  more.addEventListener("click", async () => {
+    more.disabled = true;
+    try { add(await api(`/api/search?q=${encodeURIComponent(d.query)}&offset=${offset}`)); } catch (e) { toast(e.message, true); }
+    more.disabled = false;
+  });
+  out.replaceChildren(h("p", { class: "muted small" }, `Results for "${d.query}"`), list, more); add(d);
+}
+
+// ---------- playlist ----------
+function parseRange(t, total) {
+  t = t.replace(/\s+/g, "");
+  if (!/^\d+(-\d+)?(,\d+(-\d+)?)*$/.test(t)) return null;
+  const out = new Set();
+  for (const p of t.split(",")) {
+    let a, b;
+    if (p.includes("-")) { [a, b] = p.split("-").map(Number); } else { a = b = Number(p); }
+    if (a < 1 || b < a || b - a > 100000) return null;
+    for (let k = a, hi = total ? Math.min(b, total) : b; k <= hi; k++) out.add(k);
+  }
+  return out;
+}
+function renderPlaylist(d) {
+  const pl = { url: d.url, total: d.count || null, sel: new Set(), last: null, all: false, more: d.has_more, next: 1 };
+  const list = h("div", { class: "scroll" }), moreBtn = h("button", {}, "Load more");
+  const qsel = h("select", {}, ...[...S.quals, "mp3"].map(q => h("option", { value: q }, q === "mp3" ? "MP3 (audio)" : q + "p")));
+  qsel.value = $("#q").value;
+  const cnt = h("strong", {}, "0 selected"), rng = h("input", { type: "text", class: "grow", placeholder: "Range, e.g. 1-5,8,10-12" });
+  const boxes = new Map(), got = new Map();
+  const upd = () => { cnt.textContent = pl.all && !pl.total && pl.more ? "All selected" : pl.sel.size + " selected"; };
+  const sync = () => { for (const [i, cb] of boxes) cb.checked = pl.sel.has(i); upd(); };
+  const rows = items => items.forEach(it => {
+    got.set(it.index, it);
+    const cb = h("input", { type: "checkbox" }); cb.checked = pl.sel.has(it.index); boxes.set(it.index, cb);
+    cb.addEventListener("click", ev => {
+      pl.all = false;
+      if (ev.shiftKey && pl.last != null) { const a = Math.min(pl.last, it.index), z = Math.max(pl.last, it.index);
+        for (let k = a; k <= z; k++) cb.checked ? pl.sel.add(k) : pl.sel.delete(k); sync(); }
+      else cb.checked ? pl.sel.add(it.index) : pl.sel.delete(it.index);
+      pl.last = it.index; upd();
+    });
+    list.append(h("label", { class: "pl" }, cb, h("span", { class: "n" }, it.index),
+      h("img", { src: thumb(it.id), alt: "", loading: "lazy", referrerpolicy: "no-referrer", onerror: e => e.target.style.visibility = "hidden" }),
+      h("span", { class: "t" }, it.title), h("span", { class: "d" }, fmtDur(it.duration))));
+    pl.next = it.index + 1;
+  });
+  const selectAll = () => {
+    pl.sel = new Set(); pl.all = true;
+    if (pl.total) for (let k = 1; k <= pl.total; k++) pl.sel.add(k); else for (const i of boxes.keys()) pl.sel.add(i);
+    sync();
+  };
+  const load = r => { rows(r.items); pl.more = r.has_more; if (r.count) pl.total = r.count; moreBtn.hidden = !pl.more;
+    if (pl.all && !pl.total) for (const i of boxes.keys()) pl.sel.add(i); sync(); };
+  let inflight = null;
+  const loadMore = () => {
+    if (!pl.more) return Promise.resolve(false);
+    if (!inflight) {
+      moreBtn.disabled = true;
+      inflight = api(`/api/playlist?url=${encodeURIComponent(pl.url)}&start=${pl.next}`).then(r => { load(r); return true; }, e => { toast(e.message, true); return false; })
+        .finally(() => { inflight = null; moreBtn.disabled = false; });
+    }
+    return inflight;
+  };
+  moreBtn.addEventListener("click", loadMore);
+  list.addEventListener("scroll", () => { if (pl.more && list.scrollTop + list.clientHeight >= list.scrollHeight - 240) loadMore(); }, { passive: true });
+  const addBtn = h("button", { onclick: async () => {
+    if (!pl.sel.size && !pl.all) return toast("Tick at least one video first.", true);
+    if (pl.all || [...pl.sel].some(i => !got.has(i))) {
+      addBtn.disabled = true;
+      for (let g = 0; pl.more && g < 400; g++) { toast(`Loading the rest of the list (${got.size}${pl.total ? " of " + pl.total : ""})...`); if (!(await loadMore())) break; }
+      addBtn.disabled = false;
+    }
+    const picks = [...got.values()].filter(it => pl.sel.has(it.index)).sort((a, b) => a.index - b.index);
+    if (!picks.length) return toast("Nothing to add.", true);
+    addDQ(picks);
+  } }, "Add selected to queue");
+  const apply = () => { const s = parseRange(rng.value, pl.total); if (!s) { toast("Use a range like 1-5,8,10-12", true); return; }
+    pl.sel = s; pl.all = false; sync(); };
+  rng.addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
+  const dlBtn = h("button", { class: "pri", onclick: () => {
+    if (!pl.sel.size && !pl.all) return toast("Tick at least one video first.", true);
+    const body = { kind: "playlist", url: pl.url, quality: qsel.value, title: d.title };
+    if (pl.all && !pl.total && pl.more) body.all = true; else body.indices = [...pl.sel];
+    queueDownload(body, d.title);
+  } }, "Download");
+  $("#out").replaceChildren(
+    h("h2", {}, d.title), h("p", { class: "muted small" }, (pl.total ? pl.total + " videos" : "Playlist") + ". Shift-click selects a range."),
+    h("div", { class: "tools" }, qsel, h("button", { onclick: selectAll }, "Select all"),
+      h("button", { onclick: () => { pl.sel = new Set(); pl.all = false; sync(); } }, "Select none"),
+      rng, h("button", { onclick: apply }, "Tick range"), cnt, addBtn, dlBtn),
+    list, moreBtn);
+  rows(d.items); moreBtn.hidden = !pl.more; upd();
+}
+
+// ---------- queue page (live via server-sent events) ----------
+function renderJobs() {
+  const jobs = S.jobs.slice().reverse(), active = S.jobs.filter(j => j.status === "queued" || j.status === "running").length;
+  setBadge();
+  const box = $("#jobs");
+  if (!jobs.length) return box.replaceChildren(h("p", { class: "muted" }, "Nothing queued yet."));
+  box.replaceChildren(...jobs.map(j => {
+    const bar = h("i"); if (j.pct != null) bar.style.width = j.pct + "%"; else if (j.status === "done") bar.style.width = "100%";
+    const line = j.status === "running"
+      ? [j.idx && j.n ? `[${j.idx}/${j.n}] ` : "", j.title || "", j.pct != null ? `  ${j.pct}%` : "", j.speed ? `  ${j.speed}` : "", j.eta ? `  ETA ${j.eta}` : "", j.phase && j.phase !== "downloading" ? `  (${j.phase})` : ""].join("")
+      : j.status === "done" ? (j.done ? `${j.done} saved` : "Finished") + (j.note ? ". " + j.note : "") : j.error || "";
+    return h("div", { class: "job" }, h("div", {}, h("strong", {}, `#${j.id} ${j.label}`), h("span", { class: "pill" }, j.status === "running" ? "running" : j.status),
+      j.status === "queued" ? h("button", { class: "small", onclick: () => api("/api/cancel", { id: j.id }) }, "Remove") : null),
+      h("div", { class: "bar" }, bar), h("div", { class: "muted small" }, line));
+  }));
+}
+function setBadge() {
+  const n = S.jobs.filter(j => j.status === "queued" || j.status === "running").length + DQ.items.length, badge = $("#badge");
+  badge.hidden = !n; badge.textContent = n;
+}
+// ---------- the download queue: a list you build, then send with Download all ----------
+const DQ = { items: [] };
+try { DQ.items = JSON.parse(localStorage.getItem("snagit_dq") || "[]").filter(t => t && t.url && t.title); } catch (e) {}
+const saveDQ = () => { try { localStorage.setItem("snagit_dq", JSON.stringify(DQ.items)); } catch (e) {} };
+function addDQ(list) {
+  const have = new Set(DQ.items.map(t => t.url)); let n = 0;
+  for (const it of [].concat(list)) {
+    const url = it.url || (it.id ? "https://www.youtube.com/watch?v=" + encodeURIComponent(it.id) : "");
+    if (!url || have.has(url)) continue;
+    have.add(url); n++; DQ.items.push({ title: it.title || url, url, duration: it.duration || 0 });
+  }
+  saveDQ(); renderDQ();
+  toast(n ? `Added ${n} to the queue` : "Already in the queue");
+  return n;
+}
+function renderDQ() {
+  const n = DQ.items.length;
+  $("#dqn").textContent = n ? `Ready to download (${n})` : "Ready to download";
+  $("#dqgo").disabled = !n; $("#dqclear").disabled = !n;
+  $("#dq").replaceChildren(n ? h("div", { class: "scroll" }, ...DQ.items.map((t, i) => h("div", { class: "dqi" },
+    h("span", { class: "n" }, i + 1), h("span", { class: "t" }, t.title), h("span", { class: "d" }, fmtDur(t.duration)),
+    h("button", { type: "button", "aria-label": "Remove " + t.title, onclick: () => { DQ.items.splice(i, 1); saveDQ(); renderDQ(); } }, "Remove"))))
+    : h("p", { class: "muted small" }, "Nothing here yet."));
+  setBadge();
+}
+$("#dqclear").addEventListener("click", () => { DQ.items = []; saveDQ(); renderDQ(); });
+$("#dqgo").addEventListener("click", async () => {
+  const q = $("#dqq").value, btn = $("#dqgo"); let ok = 0, fail = "";
+  btn.disabled = true;
+  while (DQ.items.length) {
+    const t = DQ.items[0];
+    try { await api("/api/download", { kind: "video", url: t.url, quality: q, title: t.title }); DQ.items.shift(); ok++; }
+    catch (e) { fail = e.message; break; }
+  }
+  saveDQ(); renderDQ();
+  if (ok) toast(`Sent ${ok} to be downloaded. They run one at a time in the terminal.`);
+  if (fail) toast(fail + (ok ? ` (${DQ.items.length} left in the list)` : ""), true);
+});
+let prevStatus = {};
+function onJobs(jobs) {
+  for (const j of jobs) { const p = prevStatus[j.id];
+    if (p && p !== j.status && j.status === "done") toast(`Finished: ${j.label}`);
+    if (p && p !== j.status && j.status === "failed") toast(`Failed: ${j.label}`, true);
+    prevStatus[j.id] = j.status; }
+  S.jobs = jobs; renderJobs();
+}
+function listen() {
+  const es = new EventSource("/api/events");
+  es.onmessage = e => { const d = JSON.parse(e.data); onJobs(d.jobs); };
+  es.onerror = () => { if (es.readyState === 2) setTimeout(listen, 5000); };
+}
+
+// ---------- player dock + "next up" list ----------
+const P = { q: [], now: null };
+try { P.q = JSON.parse(localStorage.getItem("snagit_q") || "[]").filter(t => t && t.title); } catch (e) {}
+const trackOf = (it, audio = true) => ({ title: it.title, url: it.url, audio });
+function saveQ() { try { localStorage.setItem("snagit_q", JSON.stringify(P.q)); } catch (e) {} }
+function renderDock() {
+  const has = P.now || P.q.length; $("#dock").hidden = !has;
+  $("#now").textContent = P.now ? P.now.title : "Nothing playing";
+  $("#qsum").textContent = `Next up (${P.q.length})`;
+  $("#qlist").replaceChildren(...P.q.map((t, i) => h("div", { class: "qi" }, h("span", {}, `${i + 1}. ${t.title}`),
+    h("button", { onclick: () => { P.q.splice(i, 1); saveQ(); renderDock(); start(t); } }, "Play"),
+    h("button", { onclick: () => { P.q.splice(i, 1); saveQ(); renderDock(); } }, "x"))));
+  $("#qclear").hidden = !P.q.length;
+}
+function addQ(t, front) {
+  front ? P.q.unshift(t) : P.q.push(t); saveQ(); renderDock();
+  toast(front ? "Playing next" : "Added to Next up");
+  if (!P.now) next();
+}
+function stopMedia() { for (const el of [$("#aud"), $("#vid")]) { el.pause(); el.removeAttribute("src"); el.load(); } }
+async function start(t) {
+  P.now = t; renderDock(); stopMedia();
+  const el = t.audio ? $("#aud") : $("#vid"); $("#vid").hidden = t.audio;
+  $("#now").textContent = "Loading: " + t.title;
+  try {
+    el.src = t.src || (await api("/api/stream", { url: t.url, audio: t.audio, quality: $("#q").value })).url;
+    $("#now").textContent = t.title; await el.play();
+  } catch (e) { if (P.now === t) { toast("Couldn't play that: " + e.message, true); renderDock(); } }
+}
+function next() {
+  if (P.q.length) { const t = P.q.shift(); saveQ(); start(t); }
+  else { P.now = null; stopMedia(); $("#vid").hidden = true; renderDock(); }
+}
+for (const el of [$("#aud"), $("#vid")]) {
+  el.addEventListener("ended", next);
+  el.addEventListener("error", () => { if (P.now && el.getAttribute("src")) { toast("This one won't play in the browser. Skipping.", true); next(); } });
+}
+$("#skip").addEventListener("click", next);
+$("#stop").addEventListener("click", () => { P.q.length = 0; saveQ(); next(); });
+$("#qclear").addEventListener("click", () => { P.q.length = 0; saveQ(); renderDock(); });
+async function play(it, audio) {
+  if (S.cfg.watch === "desktop" && S.local) {
+    try { const d = await api("/api/play", { url: it.url, audio, quality: $("#q").value }); toast(`Playing in ${d.player}`); }
+    catch (e) { toast(e.message, true); }
+  } else start(trackOf(it, audio));
+}
+
+// ---------- downloads page ----------
+async function loadFiles() {
+  try { S.files = (await api("/api/downloads")).files; renderFiles(); } catch (e) { $("#files").replaceChildren(h("p", { class: "err" }, e.message)); }
+}
+const fileTrack = f => ({ title: f.name.replace(/\.[^.]+$/, ""), src: "/files/" + encPath(f.path), audio: f.audio });
+function renderFiles() {
+  const q = $("#filter").value.trim().toLowerCase(), list = S.files.filter(f => !q || f.path.toLowerCase().includes(q));
+  $("#dlnote").textContent = `${list.length} file(s). Saved in ${S.output_dir || ""}`;
+  $("#files").replaceChildren(...list.map(f => h("div", { class: "file" },
+    h("div", { class: "nm" }, f.folder ? h("span", { class: "muted" }, f.folder + " / ") : null, f.name),
+    h("span", { class: "muted small" }, fmtSize(f.size)),
+    h("button", { onclick: () => start(fileTrack(f)) }, "Play"),
+    f.audio ? h("button", { onclick: () => addQ(fileTrack(f), false), title: "Play after the current one" }, "+ Up next") : null,
+    h("a", { href: "/files/" + encPath(f.path) + "?dl=1", download: f.name }, "Save"))));
+  if (!list.length) $("#files").replaceChildren(h("p", { class: "muted" }, "No finished files yet."));
+}
+$("#filter").addEventListener("input", renderFiles);
+$("#refresh").addEventListener("click", loadFiles);
+$("#playall").addEventListener("click", () => {
+  const a = S.files.filter(f => f.audio && (!$("#filter").value || f.path.toLowerCase().includes($("#filter").value.toLowerCase())));
+  if (!a.length) return toast("No audio files to play.", true);
+  a.forEach(f => P.q.push(fileTrack(f))); saveQ(); renderDock(); if (!P.now) next();
+});
+
+// ---------- requirements page ----------
+async function loadCheck() {
+  const box = $("#checks"); box.replaceChildren(h("p", { class: "muted" }, "Checking..."));
+  try {
+    const d = await api("/api/check");
+    box.replaceChildren(...d.checks.map(c => h("div", { class: "chk" }, h("b", { class: c.ok ? "ok" : "err" }, c.ok ? "[ALRIGHT]" : "[JACK]"),
+      h("span", {}, c.label, c.detail ? h("span", { class: "muted" }, "  " + c.detail) : null, !c.ok ? h("div", { class: "muted small" }, "-> " + c.fix) : null))));
+    const lb = $("#lanbox"); lb.replaceChildren();
+    if (d.lan) lb.append(h("h3", {}, "LAN mode"),
+      h("p", { class: "small" }, d.lan.on ? "On. " : "Off (idle timeout reached). ", d.lan.address ? "Address: " + d.lan.address + " (use the full link with the token from the terminal). " : "",
+        "Anyone on your network can reach the page, but they need the token, the PIN and your approval."),
+      h("p", { class: "muted small" }, "Firewall: " + d.lan.firewall));
+  } catch (e) { box.replaceChildren(h("p", { class: "err" }, e.message)); }
+}
+$("#recheck").addEventListener("click", loadCheck);
+$("#test").addEventListener("click", async () => {
+  const out = $("#testout"); out.className = "small muted"; out.textContent = "Testing a short video...";
+  try { const d = await api("/api/test", {});
+    out.className = "small " + (d.ok ? "ok" : "err");
+    out.textContent = d.ok ? `Works. Resolved "${d.title}" in ${d.secs}s.` : "Failed: " + d.error;
+  } catch (e) { out.className = "small err"; out.textContent = e.message; }
+});
+for (const [id, name] of [["upd", "update"], ["deno", "deno"]]) $("#" + id).addEventListener("click", async () => {
+  try { const d = await api("/api/action", { name }); toast(`Started as job #${d.id}. Watch the terminal.`); show("queue"); }
+  catch (e) { toast(e.message, true); }
+});
+
+// ---------- settings ----------
+function renderSettings() {
+  const c = S.cfg, ps = $("#player");
+  for (const r of $$("input[name=watch]")) { r.checked = r.value === c.watch; r.disabled = !S.local && r.value === "desktop"; }
+  ps.replaceChildren(...(c.players.length ? c.players.map(p => h("option", { value: p }, p)) : [h("option", { value: "" }, "none found")]));
+  ps.value = c.player || ""; ps.disabled = !S.local || !c.players.length;
+  $("#setnote").textContent = !S.local ? "Desktop players can only be chosen on the computer itself. This device uses the browser player."
+    : c.players.length ? "Saved automatically." : "No VLC or mpv found, so the browser player is used.";
+  $("#about").textContent = `SnagIt ${S.version}. Files are saved in ${S.output_dir}.`;
+}
+for (const r of $$("input[name=watch]")) r.addEventListener("change", async () => {
+  try { await api("/api/config", { watch: r.value }); S.cfg.watch = r.value; toast("Saved"); } catch (e) { toast(e.message, true); renderSettings(); }
+});
+$("#player").addEventListener("change", async e => {
+  try { await api("/api/config", { player: e.target.value }); S.cfg.player = e.target.value; toast("Saved"); } catch (er) { toast(er.message, true); }
+});
+
+// ---------- start ----------
+(async function init() {
+  try {
+    const st = await api("/api/state");
+    Object.assign(S, { cfg: st.config, local: st.local, quals: st.qualities, dq: st.default_quality, version: st.version, output_dir: st.output_dir });
+    if (!S.local) S.cfg.watch = "browser";
+    $("#q").replaceChildren(...S.quals.map(q => h("option", { value: q }, q + "p"))); $("#q").value = S.dq;
+    if (!st.has_ytdlp) toast("yt-dlp is missing. Open Requirements and press Update yt-dlp.", true);
+    $("#dqq").replaceChildren(...[...S.quals, "mp3"].map(q => h("option", { value: q }, q === "mp3" ? "MP3 (audio)" : q + "p"))); $("#dqq").value = S.dq;
+    renderDock(); renderDQ(); renderJobs(); listen();
+    if (location.pathname === "/check" || st.start_view === "check") setTimeout(() => show("check"), 60);
+  } catch (e) { if (e.status === 401) return showPair(); $("#results").hidden = false;
+    $("#out").replaceChildren(h("p", { class: "err" }, "Can't reach SnagIt: " + e.message)); }
+})();
+
+// ---------- themes ----------
+const THEMES = [["light", "Light", "#f5f6fa", "#0a75c2", "#c0258f"], ["dark", "Dark", "#0f1115", "#4cc2ff", "#ff5fb7"],
+  ["dracula", "Dracula", "#282a36", "#bd93f9", "#ff79c6"], ["mocha", "Catppuccin Mocha", "#1e1e2e", "#cba6f7", "#f5c2e7"],
+  ["latte", "Catppuccin Latte", "#eff1f5", "#8839ef", "#ea76cb"], ["nord", "Nord", "#2e3440", "#88c0d0", "#b48ead"],
+  ["tokyo", "Tokyo Night", "#1a1b26", "#7aa2f7", "#bb9af7"], ["gruvbox", "Gruvbox", "#282828", "#fabd2f", "#fe8019"],
+  ["rose", "Rosé Pine", "#191724", "#ebbcba", "#c4a7e7"], ["terminal", "Terminal", "#05080a", "#00e5ff", "#3dffa0"]];
+const markTheme = () => { for (const b of $$(".th")) b.classList.toggle("on", b.dataset.t === document.documentElement.dataset.theme); };
+function setTheme(id) { document.documentElement.dataset.theme = id; try { localStorage.setItem("snagit_theme", id); } catch (e) {} markTheme(); }
+const swatch = t => h("button", { class: "th", type: "button", "data-t": t[0], onclick: () => setTheme(t[0]) },
+  h("span", { class: "sw" }, ...t.slice(2).map(c => { const i = h("i"); i.style.background = c; return i; })), t[1]);
+const tm = $("#themeMenu"), tb = $("#themeBtn"), tmenu = o => { tm.hidden = !o; tb.setAttribute("aria-expanded", o); };
+tm.replaceChildren(...THEMES.map(swatch));
+tb.addEventListener("click", e => { e.stopPropagation(); tmenu(tm.hidden); });
+document.addEventListener("click", e => { if (!tm.contains(e.target)) tmenu(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") tmenu(false); });
+
+// ---------- hero: demo slideshow ----------
+const mk = (t, ...k) => h("div", { class: "win" }, h("div", { class: "wbar" }, h("i"), h("i"), h("i"), h("b", {}, t)), h("div", { class: "wbody" }, ...k));
+const many = n => Array.from({ length: n }, () => h("i"));
+const DEMOS = [
+  { t: "One box does it all", d: "Paste a video link or a playlist, or type a song name. SnagIt works out the rest.",
+    a: [mk("snagit", h("div", { class: "mbox" }, "youtube.com/watch?v=", h("u")),
+      h("div", { class: "mcard" }, h("div", { class: "mth" }), h("div", { class: "mi" }, h("b", {}, "Lo-fi beats to code to"), h("small", {}, "3:12 | 720p"), h("div", { class: "mbar" }, h("i")))))],
+    c: ["360p", "480p", "720p", "1080p", "MP3"] },
+  { t: "Pick from playlists", d: "Tick the videos you want, shift-click a range, or type 1-5,8,10-12.",
+    a: [mk("playlist", ...["Night drive", "Rain on glass", "Slow burn", "City lights", "Last train"].map((x, i) => h("div", { class: "mrow" }, h("span", { class: "ck" }), x, h("small", {}, "3:" + (10 + i * 7)))))],
+    c: ["Select all", "Tick range 1-4", "Download"] },
+  { t: "Just the music", d: "Save MP3s or stream audio while you browse. The player stays docked at the bottom.",
+    a: [mk("now playing", h("div", { class: "wave" }, ...many(24)), h("b", {}, "Midnight tape"), h("small", {}, "MP3 | Next up (3)"))],
+    c: ["MP3", "Next up", "Skip"] },
+  { t: "Phone to computer", d: "Scan the QR code, enter the PIN, approve on the computer. Send links from your phone.",
+    a: [mk("snagit --web --lan", h("div", { class: "lan" }, h("div", { class: "qr" }, ...many(81)),
+      h("div", {}, h("b", { class: "pin" }, "482913"), h("small", {}, "192.168.1.20 wants to connect. Allow? [y/N]"))))],
+    c: ["Paired for 30 days", "Save to phone"] },
+  { t: "Pick your look", d: "Dracula, Catppuccin Mocha, Nord, Tokyo Night and more. Tap one to try it.",
+    a: [mk("themes", h("div", { class: "swg" }, ...THEMES.map(swatch)))], c: [] }];
+const stage = $("#stage"), dots = $("#dots"); let cur = 0, auto0;
+DEMOS.forEach((d, i) => {
+  stage.append(h("div", { class: "slide" }, h("div", { class: "art" }, ...d.a), h("div", { class: "chips" }, ...d.c.map(x => h("span", {}, x)))));
+  dots.append(h("button", { type: "button", "aria-label": d.t, onclick: () => { pick(i); auto(); } }));
+});
+function pick(i) {
+  cur = i; [...stage.children].forEach((s, k) => s.classList.toggle("on", k === i));
+  [...dots.children].forEach((b, k) => { b.classList.remove("on"); if (k === i) { void b.offsetWidth; b.classList.add("on"); } });
+  $("#capT").textContent = DEMOS[i].t; $("#capD").textContent = DEMOS[i].d;
+}
+function auto() { clearInterval(auto0); if (!calm) auto0 = setInterval(() => { if (!document.hidden) pick((cur + 1) % DEMOS.length); }, 7000); }
+pick(0); auto(); markTheme();
+
+// ---------- header, scrollspy, logo ----------
+const hd = $("#top");
+addEventListener("scroll", () => hd.classList.toggle("solid", scrollY > 30), { passive: true });
+const spy = new IntersectionObserver(es => { for (const e of es) if (e.isIntersecting) {
+  const v = e.target.dataset.v; mark(v === "results" ? "home" : v); if (v !== "home" && v !== "results") loadSec(v); } },
+  { rootMargin: "-45% 0px -50% 0px" });
+$$("section[data-v]").forEach(s => spy.observe(s));
+$("#logo").addEventListener("click", e => { e.preventDefault(); show("home"); });
+
+// ---------- hero: floating terminal with a sample command ----------
+(function () {
+  const pre = $("#termout"), sp = (c, t) => h("span", { class: c }, t), sleep = ms => new Promise(r => setTimeout(r, ms));
+  const CMD = 'snagit "youtube.com/watch?v=dQw4w9WgXcQ" -q 720';
+  const bar = k => "[" + "#".repeat(k) + "-".repeat(10 - k) + "] " + k * 10 + "%  8.4 MiB/s";
+  const paint = (cmd, lines, caret) => pre.replaceChildren(sp("p", "$ "), sp("c", cmd), ...lines.flatMap(l => ["\n", l]), ...(caret ? [sp("caret", "")] : []));
+  const l1 = sp("o", "Resolving video..."), l2 = sp("", "Never Gonna Give You Up  (3:33)"), l4 = sp("g", "Saved to ~/Downloads/SnagIt");
+  if (calm) { paint(CMD, [l1, l2, sp("c", bar(10)), l4], false); return; }
+  (async function loop() {
+    for (;;) {
+      for (let i = 0; i <= CMD.length; i++) { paint(CMD.slice(0, i), [], true); await sleep(35 + Math.random() * 45); }
+      await sleep(400);
+      const lines = [l1]; paint(CMD, lines, false); await sleep(650);
+      lines.push(l2); paint(CMD, lines, false); await sleep(500);
+      const pb = sp("c", bar(0)); lines.push(pb); paint(CMD, lines, false);
+      for (let k = 1; k <= 10; k++) { await sleep(190); pb.textContent = bar(k); }
+      await sleep(350); lines.push(l4); paint(CMD, lines, false);
+      await sleep(4200);
+    }
+  })();
+})();
+
+// ---------- pairing (phones on --lan) ----------
+function showPair() {
+  const p = $("#pair"), pin = $("#pin"), msg = $("#pmsg"), btn = $("#pgo"); p.hidden = false; pin.focus();
+  const poll = async id => { for (;;) {
+    await new Promise(r => setTimeout(r, 1500)); let d = {};
+    try { d = await (await fetch("/pair/status?id=" + encodeURIComponent(id))).json(); } catch (e) { continue; }
+    if (d.state === "allowed") return location.reload();
+    if (d.state === "denied") { msg.textContent = "The computer said no, or nobody answered in time."; btn.disabled = false; return; } } };
+  btn.onclick = async () => { btn.disabled = true; msg.textContent = "";
+    try { const d = await api("/pair", { pin: pin.value.trim() }); msg.textContent = "Waiting for approval on the computer..."; poll(d.pending); }
+    catch (e) { msg.textContent = e.message; btn.disabled = false; } };
+  pin.onkeydown = e => { if (e.key === "Enter") btn.click(); };
+}
+</script>
+</body></html>

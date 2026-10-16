@@ -1,8 +1,8 @@
 # SnagIt
 
-A simple YouTube downloader by Echo404: playlist, single video, or MP3. It can search YouTube from the terminal, play videos in VLC or mpv, and run a local web interface you can also open from your phone.
+A simple YouTube downloader by Echo404: playlist, single video, or MP3. It can search YouTube from the terminal, play videos in VLC or mpv, and run a themed local web interface you can also open from your phone.
 
-Current version: **1.4.0**
+Current version: **1.5.0**
 
 ## Requirements
 
@@ -96,17 +96,25 @@ Downloads run in the terminal with the usual progress bar, one job at a time. Ex
 
 Big playlists load 100 videos at a time. "Select all" still selects the whole playlist.
 
+### Themes
+
+Press **Theme** at the top right: Light, Dark, Dracula, Catppuccin Mocha, Catppuccin Latte, Nord, Tokyo Night, Gruvbox, Rosé Pine and Terminal. Your pick is remembered in the browser. With no pick it follows your system's light or dark mode.
+
+The web interface is the separate file `snagit.html`. SnagIt looks for it next to `snagit.py`, then in `~/.local/share/snagit/` (`%APPDATA%\snagit` on Windows).
+
 ### Stopping
 
 * `Ctrl+C` in the terminal cancels the current download.
 * Press `Ctrl+C` twice within 2 seconds, or once when nothing is downloading, to quit SnagIt.
 
-### The pages
+### The sections
 
-| Page | What it does |
+The web interface is one scrolling page. The top nav jumps to each section, and the SnagIt logo is at the top right. The home screen has a slideshow of demo designs behind the box, with a floating logo outline and a small terminal showing a sample `snagit` command. The footer says "Made by Echo404" and links to @JeffreyPeter_.
+
+| Section | What it does |
 | --- | --- |
-| Home | The one box, search results, playlist checklist, and video cards with Watch, Audio, Download, MP3, + Queue and Next |
-| Queue | Live progress for every job: current video, percent, speed, ETA, and done or failed. You can remove jobs that haven't started |
+| Home | The one box, search results, playlist checklist, and video cards with Watch, Audio, Download, MP3 and + Queue. Long playlists scroll inside their own box and load more as you reach the bottom |
+| Queue | A list you build with + Queue or Add selected to queue. Remove single items, Clear list, or press Download all to send them to the terminal one after another. Below it, live progress for every job: current video, percent, speed, ETA, and done or failed. You can remove jobs that haven't started |
 | Downloads | Finished files from your output folder. Play them in the page, or press Save to download a copy. Has a filter box and "Play all audio". Seeking works |
 | Requirements | The `[ALRIGHT]`/`[JACK]` list with versions. Buttons: Update yt-dlp and Install Deno (both run in the terminal), and Test, which resolves a short video and reports the result |
 | Settings | Choose whether Watch and Audio play in the browser page or in VLC/mpv on the computer. Saved in your config file |
@@ -115,7 +123,7 @@ Big playlists load 100 videos at a time. "Select all" still selects the whole pl
 
 * **Browser mode** plays inside the page, using a combined stream, usually up to 720p.
 * **Desktop mode** opens VLC or mpv on the computer (computer only, not from a phone).
-* **Next up:** the "+ Queue" and "Next" buttons build a music list at the bottom of the page. It plays automatically, and Skip moves to the next song.
+* **Next up:** on the Downloads tab, "+ Up next" on a finished file adds it to a music list at the bottom of the page. It plays automatically, and Skip moves to the next song. Nothing plays from the Queue tab; it only holds videos waiting to be downloaded.
 * **Music player:** on the Downloads page, use Play on any file, or "Play all audio", to use the page as a home music player.
 
 ## Phone or another computer (`--lan`)
@@ -232,7 +240,7 @@ Your player choice and web Settings are saved in a small config file:
 
 ## Install as a command
 
-Run this once from the folder containing `snagit.py`. After that you can use `snagit` from anywhere, without typing `python` or `./`.
+Run this once from the folder containing `snagit.py` and `snagit.html`. After that you can use `snagit` from anywhere, without typing `python` or `./`.
 
 ```
 git clone https://github.com/Echo4-4/snagit.git
@@ -240,23 +248,29 @@ cd snagit
 chmod +x snagit.py
 mkdir -p ~/.local/bin
 cp snagit.py ~/.local/bin/snagit
+mkdir -p ~/.local/share/snagit
+cp snagit.html ~/.local/share/snagit/
 echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
 source ~/.zshrc
 ```
 
-Using bash? Replace `~/.zshrc` with `~/.bashrc` in the last two lines.
+Using bash? Replace `~/.zshrc` with `~/.bashrc` in the last two lines. If you already added the `PATH` line before, skip it and just run `source ~/.zshrc`.
+
+The web page is looked for next to `snagit.py` first, then in `~/.local/share/snagit/` (or `$XDG_DATA_HOME/snagit/`; on Windows, `%APPDATA%\snagit\`). That is why `snagit.html` is copied into the data folder: the installed `snagit` command lives in `~/.local/bin`, away from the original files.
 
 Check that it works:
 
 ```
 snagit -h
+snagit --web
 ```
 
-To update later, pull the latest changes and copy the file over again: save
+To update later, pull the latest changes and copy both files over again. If you skip the second `cp`, the command keeps serving the old page:
 
 ```
 git pull
 cp snagit.py ~/.local/bin/snagit
+cp snagit.html ~/.local/share/snagit/
 ```
 
 Follow on Twitter: @JeffreyPeter_
