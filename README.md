@@ -238,9 +238,29 @@ Your player choice and web Settings are saved in a small config file:
 * Windows: `%APPDATA%\snagit\config.json`
 * Linux and macOS: `~/.config/snagit/config.json` (or `$XDG_CONFIG_HOME/snagit/config.json`)
 
+## Run it with Python (no install)
+
+The quickest way, on any system. Run it from the folder containing `snagit.py` and `snagit.html`:
+
+```
+git clone https://github.com/Echo4-4/snagit.git
+cd snagit
+python3 snagit.py            # macOS / Linux
+python snagit.py             # Windows (or: py snagit.py)
+```
+
+Everything in this README works the same way, you just type the `python` part first:
+
+```
+python3 snagit.py "URL" -q 720
+python3 snagit.py --web
+```
+
 ## Install as a command
 
-Run this once from the folder containing `snagit.py` and `snagit.html`. After that you can use `snagit` from anywhere, without typing `python` or `./`.
+If you'd rather type just `snagit` from anywhere, without `python` or `./`, follow the steps for your system. Run them once from the folder containing `snagit.py` and `snagit.html`.
+
+### Linux
 
 ```
 git clone https://github.com/Echo4-4/snagit.git
@@ -256,15 +276,6 @@ source ~/.zshrc
 
 Using bash? Replace `~/.zshrc` with `~/.bashrc` in the last two lines. If you already added the `PATH` line before, skip it and just run `source ~/.zshrc`.
 
-The web page is looked for next to `snagit.py` first, then in `~/.local/share/snagit/` (or `$XDG_DATA_HOME/snagit/`; on Windows, `%APPDATA%\snagit\`). That is why `snagit.html` is copied into the data folder: the installed `snagit` command lives in `~/.local/bin`, away from the original files.
-
-Check that it works:
-
-```
-snagit -h
-snagit --web
-```
-
 To update later, pull the latest changes and copy both files over again. If you skip the second `cp`, the command keeps serving the old page:
 
 ```
@@ -272,5 +283,75 @@ git pull
 cp snagit.py ~/.local/bin/snagit
 cp snagit.html ~/.local/share/snagit/
 ```
+
+### macOS
+
+The steps are the same as Linux. macOS uses zsh by default, so `~/.zshrc` is the right file. Make sure Python 3 is installed (`python3 --version`). If it isn't, run `brew install python`.
+
+```
+git clone https://github.com/Echo4-4/snagit.git
+cd snagit
+chmod +x snagit.py
+mkdir -p ~/.local/bin
+cp snagit.py ~/.local/bin/snagit
+mkdir -p ~/.local/share/snagit
+cp snagit.html ~/.local/share/snagit/
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Using bash? Replace `~/.zshrc` with `~/.bash_profile` in the last two lines.
+
+To update later:
+
+```
+git pull
+cp snagit.py ~/.local/bin/snagit
+cp snagit.html ~/.local/share/snagit/
+```
+
+### Windows
+
+Windows has no `chmod` or `~/.local`, so SnagIt goes in `%APPDATA%\snagit` with a small launcher file. Open **PowerShell** (not Command Prompt) and run:
+
+```
+git clone https://github.com/Echo4-4/snagit.git
+cd snagit
+
+$dir = "$env:APPDATA\snagit"
+New-Item -ItemType Directory -Force $dir | Out-Null
+Copy-Item snagit.py, snagit.html $dir -Force
+
+# launcher, so typing `snagit` runs `python snagit.py`
+Set-Content "$dir\snagit.cmd" '@python "%~dp0snagit.py" %*'
+
+# add the folder to your user PATH (only if it isn't there yet)
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$dir*") {
+    [Environment]::SetEnvironmentVariable("Path", "$userPath;$dir", "User")
+}
+```
+
+Then **close PowerShell and open a new one**, so the new PATH is picked up.
+
+* Python not installed? Run `winget install Python.Python.3.12`, or get it from python.org and tick "Add python.exe to PATH".
+* If `python` opens the Microsoft Store instead, use the `py` launcher: change the launcher line to `'@py -3 "%~dp0snagit.py" %*'`.
+* The web page is found next to `snagit.py`, which is why both files go in the same folder.
+
+To update later, from the `snagit` folder:
+
+```
+git pull
+Copy-Item snagit.py, snagit.html "$env:APPDATA\snagit" -Force
+```
+
+### Check that it works
+
+```
+snagit -h
+snagit --web
+```
+
+If `snagit` isn't found, open a new terminal window first. If it still isn't, check that the install folder is on your PATH (`~/.local/bin` on Linux and macOS, `%APPDATA%\snagit` on Windows). You can always fall back to `python3 snagit.py` (`python snagit.py` on Windows).
 
 Follow on Twitter: @JeffreyPeter_
